@@ -1,16 +1,23 @@
 import os
+import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import FastAPI
-from sqlalchemy import DateTime, Integer, String, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from fastapi import Depends, FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import DateTime, Integer, String, create_engine, select
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    sessionmaker,
+)
 
 
 database_url = os.environ["DATABASE_URL"]
 
-# يجعل رابط Render متوافقًا مع SQLAlchemy + Psycopg
 if database_url.startswith("postgres://"):
     database_url = database_url.replace(
         "postgres://",
@@ -24,9 +31,16 @@ elif database_url.startswith("postgresql://"):
         1,
     )
 
+
 engine = create_engine(
     database_url,
     pool_pre_ping=True,
+)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
 )
 
 
@@ -109,6 +123,42 @@ class Voucher(Base):
     )
 
 
+class VoucherCreate(BaseModel):
+    order_id: str = Field(min_length=1, max_length=100)
+    product_id: str = Field(min_length=1, max_length=100)
+    product_name: str = Field(min_length=1, max_length=255)
+    merchant_name: str = Field(min_length=1, max_length=255)
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    option_name: Optional[str] = None
+    validity_days: int = Field(default=7, ge=1, le=365)
+
+
+class VoucherResponse(BaseModel):
+    code: str
+    verification_token: str
+    verification_url: str
+    status: str
+    expires_at: datetime
+
+
+def get_db():
+    session = SessionLocal()
+
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def generate_voucher_code() -> str:
+    return "PKG-" + secrets.token_hex(4).upper()
+
+
+def generate_verification_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -117,7 +167,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pakgat Voucher System",
-    version="1.1",
+    version="1.2",
     lifespan=lifespan,
 )
 
@@ -127,7 +177,7 @@ def home():
     return {
         "status": "running",
         "service": "Pakgat Voucher System",
-        "version": "1.1",
+        "version": "1.2",
         "database": "connected",
     }
 
@@ -141,3 +191,56 @@ def health():
         "ok": True,
         "database": "connected",
     }
+
+
+@app.post(
+    "/api/vouchers",
+    response_model=VoucherResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_voucher(
+    payload: VoucherCreate,
+    db: Session = Depends(get_db),
+):
+    existing = db.scalar(
+        select(Voucher).where(
+            Voucher.order_id == payload.order_id,
+            Voucher.product_id == payload.product_id,
+        )
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="A voucher already exists for this order and product.",
+        )
+
+    voucher = Voucher(
+        code=generate_voucher_code(),
+        verification_token=generate_verification_token(),
+        order_id=payload.order_id,
+        product_id=payload.product_id,
+        product_name=payload.product_name,
+        merchant_name=payload.merchant_name,
+        customer_name=payload.customer_name,
+        customer_phone=payload.customer_phone,
+        option_name=payload.option_name,
+        status="active",
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(days=payload.validity_days),
+    )
+
+    db.add(voucher)
+    db.commit()
+    db.refresh(voucher)
+
+    return VoucherResponse(
+        code=voucher.code,
+        verification_token=voucher.verification_token,
+        verification_url=(
+            "https://pakgat-voucher-system.onrender.com/v/"
+            + voucher.verification_token
+        ),
+        status=voucher.status,
+        expires_at=voucher.expires_at,
+    )
