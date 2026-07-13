@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Form, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Integer, String, create_engine, select
@@ -168,7 +168,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pakgat Voucher System",
-    version="1.2",
+    version="1.3",
     lifespan=lifespan,
 )
 
@@ -178,7 +178,7 @@ def home():
     return {
         "status": "running",
         "service": "Pakgat Voucher System",
-        "version": "1.2",
+        "version": "1.3",
         "database": "connected",
     }
 
@@ -245,6 +245,8 @@ def create_voucher(
         status=voucher.status,
         expires_at=voucher.expires_at,
     )
+
+
 def update_voucher_status(
     voucher: Voucher,
     db: Session,
@@ -289,15 +291,47 @@ def build_verification_page(
         status_background = "#e2e8f0"
         status_icon = "?"
 
+    redeem_section = ""
+
+    if voucher.status == "active":
+        redeem_section = f"""
+        <form method="post"
+              action="/v/{voucher.verification_token}/redeem"
+              onsubmit="return confirm('هل أنت متأكد من تسليم الخدمة للعميل؟');">
+
+            <button type="submit" class="redeem-button">
+                تأكيد تسليم الخدمة للعميل
+            </button>
+        </form>
+
+        <div class="employee-note">
+            <strong>تعليمات للموظف</strong>
+            <p>رحّب بعميلك وعميل بكجات بابتسامة.</p>
+            <p>تأكد من مطابقة الخدمة قبل الضغط على الزر.</p>
+            <p>اضغط الزر قبل بدء تقديم الخدمة.</p>
+            <p>بعد الاعتماد لن يمكن استخدام القسيمة مرة أخرى.</p>
+        </div>
+        """
+
+    redeemed_details = ""
+
+    if voucher.status == "redeemed" and voucher.redeemed_at:
+        redeemed_details = f"""
+        <div class="used-details">
+            تم استخدام القسيمة بتاريخ:
+            <strong>
+                {voucher.redeemed_at.strftime("%Y-%m-%d %H:%M")}
+            </strong>
+        </div>
+        """
+
     return f"""
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
     <head>
         <meta charset="UTF-8">
-
         <meta name="viewport"
               content="width=device-width, initial-scale=1.0">
-
         <title>التحقق من قسيمة بكجات</title>
 
         <style>
@@ -427,6 +461,49 @@ def build_verification_page(
                 letter-spacing: 1px;
             }}
 
+            .redeem-button {{
+                width: 100%;
+                padding: 17px;
+                margin-top: 20px;
+                border: 0;
+                border-radius: 15px;
+                cursor: pointer;
+                color: #ffffff;
+                background: linear-gradient(135deg, #0b5cff, #1648c8);
+                box-shadow: 0 12px 28px rgba(11, 92, 255, 0.25);
+                font-size: 18px;
+                font-weight: 900;
+            }}
+
+            .employee-note {{
+                padding: 18px;
+                margin-top: 18px;
+                border-radius: 16px;
+                color: #475569;
+                background: #f8fafc;
+                line-height: 1.8;
+            }}
+
+            .employee-note strong {{
+                display: block;
+                margin-bottom: 7px;
+                color: #10233f;
+                font-size: 17px;
+            }}
+
+            .employee-note p {{
+                margin: 5px 0;
+            }}
+
+            .used-details {{
+                padding: 15px;
+                margin-top: 16px;
+                text-align: center;
+                border-radius: 14px;
+                color: #7f1d1d;
+                background: #fff1f2;
+            }}
+
             .footer {{
                 margin-top: 22px;
                 text-align: center;
@@ -474,45 +551,35 @@ def build_verification_page(
 
             <section class="details">
                 <div class="detail-row">
-                    <span class="label">
-                        كود القسيمة
-                    </span>
-
-                    <span class="value code">
-                        {voucher.code}
-                    </span>
+                    <span class="label">كود القسيمة</span>
+                    <span class="value code">{voucher.code}</span>
                 </div>
 
                 <div class="detail-row">
-                    <span class="label">
-                        الخيار
-                    </span>
-
+                    <span class="label">الخيار</span>
                     <span class="value">
                         {voucher.option_name or "غير محدد"}
                     </span>
                 </div>
 
                 <div class="detail-row">
-                    <span class="label">
-                        اسم العميل
-                    </span>
-
+                    <span class="label">اسم العميل</span>
                     <span class="value">
                         {voucher.customer_name or "عميل بكجات"}
                     </span>
                 </div>
 
                 <div class="detail-row">
-                    <span class="label">
-                        تاريخ الانتهاء
-                    </span>
-
+                    <span class="label">تاريخ الانتهاء</span>
                     <span class="value">
                         {voucher.expires_at.strftime("%Y-%m-%d %H:%M")}
                     </span>
                 </div>
             </section>
+
+            {redeem_section}
+
+            {redeemed_details}
 
             <footer class="footer">
                 نظام التحقق من القسائم — Pakgat
@@ -533,8 +600,7 @@ def verify_voucher(
 ):
     voucher = db.scalar(
         select(Voucher).where(
-            Voucher.verification_token
-            == verification_token
+            Voucher.verification_token == verification_token
         )
     )
 
@@ -546,8 +612,7 @@ def verify_voucher(
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport"
-                      content="width=device-width,
-                      initial-scale=1.0">
+                      content="width=device-width, initial-scale=1.0">
                 <title>القسيمة غير موجودة</title>
             </head>
 
@@ -560,10 +625,7 @@ def verify_voucher(
                 <h1 style="color:#b91c1c">
                     القسيمة غير موجودة
                 </h1>
-
-                <p>
-                    تأكد من صحة رابط القسيمة.
-                </p>
+                <p>تأكد من صحة رابط القسيمة.</p>
             </body>
             </html>
             """,
@@ -575,6 +637,8 @@ def verify_voucher(
     return HTMLResponse(
         content=build_verification_page(voucher)
     )
+
+
 @app.post(
     "/v/{verification_token}/redeem",
     response_class=HTMLResponse,
