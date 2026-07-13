@@ -575,3 +575,67 @@ def verify_voucher(
     return HTMLResponse(
         content=build_verification_page(voucher)
     )
+@app.post(
+    "/v/{verification_token}/redeem",
+    response_class=HTMLResponse,
+)
+def redeem_voucher(
+    verification_token: str,
+    db: Session = Depends(get_db),
+):
+    voucher = db.scalar(
+        select(Voucher).where(
+            Voucher.verification_token == verification_token
+        )
+    )
+
+    if not voucher:
+        return HTMLResponse(
+            content="""
+            <!DOCTYPE html>
+            <html lang="ar" dir="rtl">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport"
+                      content="width=device-width, initial-scale=1.0">
+                <title>القسيمة غير موجودة</title>
+            </head>
+            <body style="
+                font-family: Arial;
+                text-align: center;
+                padding: 60px;
+                background: #f8fafc;
+            ">
+                <h1 style="color:#b91c1c">
+                    القسيمة غير موجودة
+                </h1>
+                <p>تأكد من صحة رابط القسيمة.</p>
+            </body>
+            </html>
+            """,
+            status_code=404,
+        )
+
+    update_voucher_status(voucher, db)
+
+    if voucher.status == "expired":
+        return HTMLResponse(
+            content=build_verification_page(voucher),
+            status_code=410,
+        )
+
+    if voucher.status == "redeemed":
+        return HTMLResponse(
+            content=build_verification_page(voucher),
+            status_code=409,
+        )
+
+    voucher.status = "redeemed"
+    voucher.redeemed_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(voucher)
+
+    return HTMLResponse(
+        content=build_verification_page(voucher)
+    )
