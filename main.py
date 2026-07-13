@@ -1,12 +1,18 @@
 import os
 import secrets
+import hashlib
+import hmac
+import io
+import smtplib
+from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+import qrcode
 from sqlalchemy import DateTime, Integer, String, create_engine, select
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -168,9 +174,274 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pakgat Voucher System",
-    version="1.3",
+    version="1.4",
     lifespan=lifespan,
 )
+
+
+BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL",
+    "https://pakgat-voucher-system.onrender.com",
+).rstrip("/")
+
+SALLA_WEBHOOK_SECRET = os.getenv("SALLA_WEBHOOK_SECRET", "")
+VOUCHER_PRODUCT_IDS = {
+    value.strip()
+    for value in os.getenv(
+        "VOUCHER_PRODUCT_IDS",
+        "782332771",
+    ).split(",")
+    if value.strip()
+}
+
+
+def verify_salla_signature(raw_body: bytes, received_signature: str) -> bool:
+    if not SALLA_WEBHOOK_SECRET:
+        return False
+
+    expected_signature = hmac.new(
+        SALLA_WEBHOOK_SECRET.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(
+        expected_signature,
+        received_signature or "",
+    )
+
+
+def first_value(mapping: dict, *paths: str):
+    for path in paths:
+        current = mapping
+        found = True
+
+        for part in path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                found = False
+                break
+            current = current[part]
+
+        if found and current not in (None, ""):
+            return current
+
+    return None
+
+
+def normalize_items(data: dict) -> list[dict]:
+    items = data.get("items") or data.get("products") or []
+    return items if isinstance(items, list) else []
+
+
+def item_product_id(item: dict) -> str:
+    value = first_value(
+        item,
+        "product.id",
+        "product_id",
+        "id",
+    )
+    return str(value or "")
+
+
+def item_product_name(item: dict) -> str:
+    return str(
+        first_value(
+            item,
+            "product.name",
+            "name",
+            "product_name",
+        )
+        or "عرض بكجات"
+    )
+
+
+def item_option_name(item: dict) -> Optional[str]:
+    options = item.get("options")
+
+    if isinstance(options, list):
+        labels = []
+
+        for option in options:
+            if isinstance(option, dict):
+                label = (
+                    first_value(option, "value.name", "value", "name")
+                    or ""
+                )
+                if label:
+                    labels.append(str(label))
+
+        return "، ".join(labels) or None
+
+    return str(options) if options else None
+
+
+def item_quantity(item: dict) -> int:
+    value = first_value(item, "quantity", "qty")
+
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def generate_qr_png(url: str) -> bytes:
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def send_voucher_email(
+    customer_email: str,
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    verification_url: str,
+    expires_at: datetime,
+) -> None:
+    smtp_host = os.getenv("SMTP_HOST", "")
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user)
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+    if not all(
+        [
+            smtp_host,
+            smtp_user,
+            smtp_password,
+            smtp_from,
+            customer_email,
+        ]
+    ):
+        return
+
+    message = EmailMessage()
+    message["Subject"] = f"قسيمتك من بكجات — {product_name}"
+    message["From"] = smtp_from
+    message["To"] = customer_email
+
+    message.set_content(
+        f"""مرحبًا {customer_name or 'عميل بكجات'},
+
+تم إصدار قسيمتك بنجاح.
+
+العرض: {product_name}
+الكود: {voucher_code}
+تاريخ الانتهاء: {expires_at.strftime('%Y-%m-%d %H:%M')}
+
+افتح القسيمة:
+{verification_url}
+
+أظهر القسيمة للتاجر عند استلام الخدمة فقط.
+"""
+    )
+
+    html = f"""
+    <html lang="ar" dir="rtl">
+      <body style="font-family:Arial,sans-serif;line-height:1.8;color:#10233f">
+        <h2 style="color:#0b5cff">بكجات Pakgat</h2>
+        <p>مرحبًا {customer_name or 'عميل بكجات'}،</p>
+        <p>تم إصدار قسيمتك بنجاح.</p>
+        <p><strong>العرض:</strong> {product_name}</p>
+        <p><strong>الكود:</strong> {voucher_code}</p>
+        <p><strong>تاريخ الانتهاء:</strong>
+           {expires_at.strftime('%Y-%m-%d %H:%M')}</p>
+        <p>
+          <img src="cid:voucher-qr" alt="QR" width="240"
+               style="display:block;margin:20px auto">
+        </p>
+        <p style="text-align:center">
+          <a href="{verification_url}"
+             style="display:inline-block;padding:13px 24px;background:#0b5cff;
+                    color:white;text-decoration:none;border-radius:10px">
+            فتح القسيمة
+          </a>
+        </p>
+        <p><strong>تنبيه:</strong>
+           أظهر القسيمة للتاجر عند استلام الخدمة فقط.</p>
+      </body>
+    </html>
+    """
+
+    message.add_alternative(html, subtype="html")
+    html_part = message.get_payload()[-1]
+    html_part.add_related(
+        generate_qr_png(verification_url),
+        maintype="image",
+        subtype="png",
+        cid="<voucher-qr>",
+        filename="pakgat-voucher-qr.png",
+    )
+
+    if smtp_port == 465:
+        with smtplib.SMTP_SSL(
+            smtp_host,
+            smtp_port,
+            timeout=20,
+        ) as smtp:
+            smtp.login(smtp_user, smtp_password)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(
+            smtp_host,
+            smtp_port,
+            timeout=20,
+        ) as smtp:
+            smtp.starttls()
+            smtp.login(smtp_user, smtp_password)
+            smtp.send_message(message)
+
+
+def create_voucher_record(
+    db: Session,
+    order_id: str,
+    product_id: str,
+    product_name: str,
+    merchant_name: str,
+    customer_name: Optional[str],
+    customer_phone: Optional[str],
+    option_name: Optional[str],
+    validity_days: int = 7,
+) -> Voucher:
+    existing = db.scalar(
+        select(Voucher).where(
+            Voucher.order_id == order_id,
+            Voucher.product_id == product_id,
+        )
+    )
+
+    if existing:
+        return existing
+
+    voucher = Voucher(
+        code=generate_voucher_code(),
+        verification_token=generate_verification_token(),
+        order_id=order_id,
+        product_id=product_id,
+        product_name=product_name,
+        merchant_name=merchant_name,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        option_name=option_name,
+        status="active",
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(days=validity_days),
+    )
+
+    db.add(voucher)
+    db.commit()
+    db.refresh(voucher)
+    return voucher
 
 
 @app.get("/")
@@ -178,7 +449,7 @@ def home():
     return {
         "status": "running",
         "service": "Pakgat Voucher System",
-        "version": "1.3",
+        "version": "1.4",
         "database": "connected",
     }
 
@@ -239,8 +510,7 @@ def create_voucher(
         code=voucher.code,
         verification_token=voucher.verification_token,
         verification_url=(
-            "https://pakgat-voucher-system.onrender.com/v/"
-            + voucher.verification_token
+            BASE_URL + "/v/" + voucher.verification_token
         ),
         status=voucher.status,
         expires_at=voucher.expires_at,
@@ -703,3 +973,224 @@ def redeem_voucher(
     return HTMLResponse(
         content=build_verification_page(voucher)
     )
+
+
+
+@app.get(
+    "/v/{verification_token}/qr.png",
+    response_class=Response,
+)
+def voucher_qr(
+    verification_token: str,
+    db: Session = Depends(get_db),
+):
+    voucher = db.scalar(
+        select(Voucher).where(
+            Voucher.verification_token == verification_token
+        )
+    )
+
+    if not voucher:
+        raise HTTPException(
+            status_code=404,
+            detail="Voucher not found.",
+        )
+
+    verification_url = BASE_URL + "/v/" + verification_token
+
+    return Response(
+        content=generate_qr_png(verification_url),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=300",
+        },
+    )
+
+
+@app.post("/webhooks/salla")
+async def salla_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    raw_body = await request.body()
+    received_signature = request.headers.get(
+        "x-salla-signature",
+        "",
+    )
+
+    if not verify_salla_signature(
+        raw_body,
+        received_signature,
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "ok": False,
+                "detail": "Invalid Salla signature.",
+            },
+        )
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "detail": "Invalid JSON.",
+            },
+        )
+
+    event = str(payload.get("event") or "")
+    data = payload.get("data") or {}
+
+    if event != "order.payment.updated":
+        return {
+            "ok": True,
+            "ignored": True,
+            "reason": "Unsupported event.",
+        }
+
+    payment_status = str(
+        first_value(
+            data,
+            "payment.status.slug",
+            "payment.status",
+            "payment_status",
+            "status.slug",
+        )
+        or ""
+    ).lower()
+
+    if payment_status not in {
+        "paid",
+        "completed",
+        "success",
+        "successful",
+    }:
+        return {
+            "ok": True,
+            "ignored": True,
+            "reason": "Order payment is not paid.",
+            "payment_status": payment_status,
+        }
+
+    base_order_id = str(
+        first_value(
+            data,
+            "id",
+            "order.id",
+            "reference_id",
+        )
+        or ""
+    )
+
+    if not base_order_id:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detail": "Order ID is missing.",
+            },
+        )
+
+    customer_name = str(
+        first_value(
+            data,
+            "customer.name",
+            "customer.first_name",
+        )
+        or "عميل بكجات"
+    )
+    customer_email = str(
+        first_value(
+            data,
+            "customer.email",
+            "email",
+        )
+        or ""
+    )
+    customer_phone = str(
+        first_value(
+            data,
+            "customer.mobile",
+            "customer.phone",
+            "mobile",
+        )
+        or ""
+    )
+    merchant_name = str(
+        first_value(
+            payload,
+            "merchant.name",
+            "merchant.store_name",
+        )
+        or "Pakgat"
+    )
+
+    created = []
+
+    for item in normalize_items(data):
+        product_id = item_product_id(item)
+
+        if product_id not in VOUCHER_PRODUCT_IDS:
+            continue
+
+        quantity = item_quantity(item)
+
+        for index in range(1, quantity + 1):
+            voucher_order_id = (
+                f"{base_order_id}:{product_id}:{index}"
+            )
+
+            voucher = create_voucher_record(
+                db=db,
+                order_id=voucher_order_id,
+                product_id=product_id,
+                product_name=item_product_name(item),
+                merchant_name=merchant_name,
+                customer_name=customer_name,
+                customer_phone=customer_phone,
+                option_name=item_option_name(item),
+                validity_days=int(
+                    os.getenv(
+                        "DEFAULT_VALIDITY_DAYS",
+                        "7",
+                    )
+                ),
+            )
+
+            verification_url = (
+                BASE_URL
+                + "/v/"
+                + voucher.verification_token
+            )
+
+            created.append(
+                {
+                    "code": voucher.code,
+                    "verification_url": verification_url,
+                }
+            )
+
+            if customer_email:
+                background_tasks.add_task(
+                    send_voucher_email,
+                    customer_email,
+                    customer_name,
+                    voucher.product_name,
+                    voucher.code,
+                    verification_url,
+                    voucher.expires_at,
+                )
+
+    return {
+        "ok": True,
+        "event": event,
+        "created_count": len(created),
+        "email_queued": bool(
+            created and customer_email
+        ),
+        "vouchers": created,
+    }
