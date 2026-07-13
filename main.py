@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Integer, String, create_engine, select
 from sqlalchemy.orm import (
     DeclarativeBase,
