@@ -244,3 +244,333 @@ def create_voucher(
         status=voucher.status,
         expires_at=voucher.expires_at,
     )
+def update_voucher_status(
+    voucher: Voucher,
+    db: Session,
+) -> str:
+    current_time = datetime.now(timezone.utc)
+
+    if (
+        voucher.status == "active"
+        and voucher.expires_at < current_time
+    ):
+        voucher.status = "expired"
+        db.commit()
+        db.refresh(voucher)
+
+    return voucher.status
+
+
+def build_verification_page(
+    voucher: Voucher,
+) -> str:
+    if voucher.status == "active":
+        status_title = "القسيمة صالحة"
+        status_color = "#15803d"
+        status_background = "#dcfce7"
+        status_icon = "✓"
+
+    elif voucher.status == "redeemed":
+        status_title = "تم استخدام القسيمة"
+        status_color = "#b91c1c"
+        status_background = "#fee2e2"
+        status_icon = "✓"
+
+    elif voucher.status == "expired":
+        status_title = "القسيمة منتهية"
+        status_color = "#a16207"
+        status_background = "#fef3c7"
+        status_icon = "!"
+
+    else:
+        status_title = "حالة القسيمة غير معروفة"
+        status_color = "#475569"
+        status_background = "#e2e8f0"
+        status_icon = "?"
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+
+        <meta name="viewport"
+              content="width=device-width, initial-scale=1.0">
+
+        <title>التحقق من قسيمة بكجات</title>
+
+        <style>
+            * {{
+                box-sizing: border-box;
+            }}
+
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                padding: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: Arial, sans-serif;
+                background: linear-gradient(
+                    135deg,
+                    #eff6ff,
+                    #ffffff,
+                    #dbeafe
+                );
+                color: #10233f;
+            }}
+
+            .card {{
+                width: 100%;
+                max-width: 560px;
+                padding: 28px;
+                background: #ffffff;
+                border: 1px solid #dbeafe;
+                border-radius: 28px;
+                box-shadow:
+                    0 22px 70px rgba(11, 92, 255, 0.15);
+            }}
+
+            .brand {{
+                margin-bottom: 22px;
+                text-align: center;
+            }}
+
+            .brand-ar {{
+                margin: 0;
+                color: #0b5cff;
+                font-size: 42px;
+                font-weight: 900;
+            }}
+
+            .brand-en {{
+                margin-top: -5px;
+                color: #0b5cff;
+                font-size: 24px;
+                font-weight: 800;
+            }}
+
+            .status-box {{
+                padding: 18px;
+                margin-bottom: 24px;
+                text-align: center;
+                border-radius: 18px;
+                color: {status_color};
+                background: {status_background};
+            }}
+
+            .status-icon {{
+                width: 54px;
+                height: 54px;
+                margin: 0 auto 10px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 50%;
+                color: #ffffff;
+                background: {status_color};
+                font-size: 30px;
+                font-weight: bold;
+            }}
+
+            .status-title {{
+                margin: 0;
+                font-size: 25px;
+                font-weight: 900;
+            }}
+
+            .service-name {{
+                margin: 0 0 8px;
+                text-align: center;
+                font-size: 27px;
+            }}
+
+            .merchant-name {{
+                margin: 0 0 24px;
+                text-align: center;
+                color: #64748b;
+                font-size: 18px;
+            }}
+
+            .details {{
+                overflow: hidden;
+                border: 1px solid #e2e8f0;
+                border-radius: 18px;
+            }}
+
+            .detail-row {{
+                padding: 15px 18px;
+                display: flex;
+                justify-content: space-between;
+                gap: 20px;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+
+            .detail-row:last-child {{
+                border-bottom: 0;
+            }}
+
+            .label {{
+                color: #64748b;
+            }}
+
+            .value {{
+                font-weight: 800;
+            }}
+
+            .code {{
+                direction: ltr;
+                display: inline-block;
+                color: #0b5cff;
+                letter-spacing: 1px;
+            }}
+
+            .footer {{
+                margin-top: 22px;
+                text-align: center;
+                color: #94a3b8;
+                font-size: 13px;
+            }}
+
+            @media (max-width: 600px) {{
+                .card {{
+                    padding: 22px 17px;
+                }}
+
+                .detail-row {{
+                    flex-direction: column;
+                    gap: 5px;
+                }}
+            }}
+        </style>
+    </head>
+
+    <body>
+        <main class="card">
+            <header class="brand">
+                <h1 class="brand-ar">بكجات</h1>
+                <div class="brand-en">Pakgat</div>
+            </header>
+
+            <section class="status-box">
+                <div class="status-icon">
+                    {status_icon}
+                </div>
+
+                <h2 class="status-title">
+                    {status_title}
+                </h2>
+            </section>
+
+            <h2 class="service-name">
+                {voucher.product_name}
+            </h2>
+
+            <p class="merchant-name">
+                {voucher.merchant_name}
+            </p>
+
+            <section class="details">
+                <div class="detail-row">
+                    <span class="label">
+                        كود القسيمة
+                    </span>
+
+                    <span class="value code">
+                        {voucher.code}
+                    </span>
+                </div>
+
+                <div class="detail-row">
+                    <span class="label">
+                        الخيار
+                    </span>
+
+                    <span class="value">
+                        {voucher.option_name or "غير محدد"}
+                    </span>
+                </div>
+
+                <div class="detail-row">
+                    <span class="label">
+                        اسم العميل
+                    </span>
+
+                    <span class="value">
+                        {voucher.customer_name or "عميل بكجات"}
+                    </span>
+                </div>
+
+                <div class="detail-row">
+                    <span class="label">
+                        تاريخ الانتهاء
+                    </span>
+
+                    <span class="value">
+                        {voucher.expires_at.strftime("%Y-%m-%d %H:%M")}
+                    </span>
+                </div>
+            </section>
+
+            <footer class="footer">
+                نظام التحقق من القسائم — Pakgat
+            </footer>
+        </main>
+    </body>
+    </html>
+    """
+
+
+@app.get(
+    "/v/{verification_token}",
+    response_class=HTMLResponse,
+)
+def verify_voucher(
+    verification_token: str,
+    db: Session = Depends(get_db),
+):
+    voucher = db.scalar(
+        select(Voucher).where(
+            Voucher.verification_token
+            == verification_token
+        )
+    )
+
+    if not voucher:
+        return HTMLResponse(
+            content="""
+            <!DOCTYPE html>
+            <html lang="ar" dir="rtl">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport"
+                      content="width=device-width,
+                      initial-scale=1.0">
+                <title>القسيمة غير موجودة</title>
+            </head>
+
+            <body style="
+                font-family: Arial;
+                text-align: center;
+                padding: 60px;
+                background: #f8fafc;
+            ">
+                <h1 style="color:#b91c1c">
+                    القسيمة غير موجودة
+                </h1>
+
+                <p>
+                    تأكد من صحة رابط القسيمة.
+                </p>
+            </body>
+            </html>
+            """,
+            status_code=404,
+        )
+
+    update_voucher_status(voucher, db)
+
+    return HTMLResponse(
+        content=build_verification_page(voucher)
+    )
