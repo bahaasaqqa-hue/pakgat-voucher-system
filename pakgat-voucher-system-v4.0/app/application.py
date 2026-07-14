@@ -6,17 +6,20 @@ import hmac
 import html
 import io
 import smtplib
+import base64
 from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+import httpx
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, Field
 import qrcode
-from sqlalchemy import DateTime, Integer, String, create_engine, select, update, or_, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine, select, update, or_, func, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -48,13 +51,39 @@ class Voucher(Base):
     product_id: Mapped[str] = mapped_column(String(100), index=True)
     product_name: Mapped[str] = mapped_column(String(255))
     merchant_name: Mapped[str] = mapped_column(String(255))
+    merchant_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     customer_phone: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     option_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     redeemed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MerchantConnection(Base):
+    __tablename__ = "merchant_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    salla_merchant_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    merchant_name: Mapped[str] = mapped_column(String(255), default="Pakgat")
+    access_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    refresh_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    product_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    merchant_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    def product_ids(self) -> set[str]:
+        try:
+            values = json.loads(self.product_ids_json or "[]")
+            return {str(v).strip() for v in values if str(v).strip()}
+        except (TypeError, ValueError):
+            return set()
 
 
 class AuditLog(Base):
@@ -122,6 +151,7 @@ def generate_verification_token() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_database_schema()
     # Populate the audit table for vouchers created before audit logging was added.
     # The operation is idempotent, so every deployment can run it safely.
     with SessionLocal() as db:
@@ -129,7 +159,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pakgat Voucher System", version="3.0", lifespan=lifespan)
+app = FastAPI(title="Pakgat Voucher System", version="4.0", lifespan=lifespan)
 
 BASE_URL = env("PUBLIC_BASE_URL", "https://pakgat-voucher-system.onrender.com").rstrip("/")
 SALLA_WEBHOOK_SECRET = env("SALLA_WEBHOOK_SECRET")
@@ -137,6 +167,14 @@ ADMIN_USERNAME = env("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = env("ADMIN_PASSWORD")
 ADMIN_SECRET = env("ADMIN_SECRET", SALLA_WEBHOOK_SECRET or "change-this-admin-secret")
 COOKIE_SECURE = env("COOKIE_SECURE", "true").lower() != "false"
+
+SALLA_CLIENT_ID = env("SALLA_CLIENT_ID")
+SALLA_CLIENT_SECRET = env("SALLA_CLIENT_SECRET")
+SALLA_AUTHORIZE_URL = env("SALLA_AUTHORIZE_URL", "https://accounts.salla.sa/oauth2/auth")
+SALLA_TOKEN_URL = env("SALLA_TOKEN_URL", "https://accounts.salla.sa/oauth2/token")
+SALLA_API_BASE = env("SALLA_API_BASE", "https://api.salla.dev/admin/v2").rstrip("/")
+SALLA_OAUTH_SCOPES = env("SALLA_OAUTH_SCOPES", "offline_access")
+SALLA_REDIRECT_URI = env("SALLA_REDIRECT_URI", BASE_URL + "/oauth/salla/callback")
 
 try:
     MERCHANT_CODES = json.loads(env("MERCHANT_CODES", "{}"))
@@ -154,8 +192,81 @@ BASE_CSS = """
 def page_shell(title: str, body: str, admin: bool = False) -> str:
     nav = ""
     if admin:
-        nav = f'<div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-muted" href="/admin">لوحة الإدارة</a><a class="btn btn-muted" href="/admin/vouchers/new">قسيمة جديدة</a><a class="btn btn-muted" href="/admin/audit">سجل العمليات</a><a class="btn btn-muted" href="/admin/integrations">تكامل سلة</a><form method="post" action="/admin/logout" style="margin:0"><button class="btn btn-danger" type="submit">تسجيل الخروج</button></form></div>'
+        nav = f'<div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-muted" href="/admin">لوحة الإدارة</a><a class="btn btn-muted" href="/admin/vouchers/new">قسيمة جديدة</a><a class="btn btn-muted" href="/admin/audit">سجل العمليات</a><a class="btn btn-muted" href="/admin/integrations">تكامل سلة</a><a class="btn btn-muted" href="/admin/merchants">التجار</a><form method="post" action="/admin/logout" style="margin:0"><button class="btn btn-danger" type="submit">تسجيل الخروج</button></form></div>'
     return f"""<!doctype html><html lang='ar' dir='rtl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{esc(title)} | Pakgat</title><style>{BASE_CSS}</style></head><body><header class='topbar'><div class='wrap'><a href='/' class='brand'>بكجات <small>Pakgat Voucher System</small></a>{nav}</div></header>{body}</body></html>"""
+
+
+def ensure_database_schema() -> None:
+    """Apply small additive migrations needed by the current release."""
+    inspector = inspect(engine)
+    columns = {c["name"] for c in inspector.get_columns("vouchers")}
+    statements = []
+    if "merchant_id" not in columns:
+        statements.append("ALTER TABLE vouchers ADD COLUMN merchant_id VARCHAR(100)")
+    if "customer_email" not in columns:
+        statements.append("ALTER TABLE vouchers ADD COLUMN customer_email VARCHAR(255)")
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_vouchers_merchant_id ON vouchers (merchant_id)"))
+
+
+def _fernet() -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(ADMIN_SECRET.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_secret(value: str) -> Optional[str]:
+    return _fernet().encrypt(value.encode()).decode() if value else None
+
+
+def decrypt_secret(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    try:
+        return _fernet().decrypt(value.encode()).decode()
+    except InvalidToken:
+        return ""
+
+
+def oauth_state(merchant_db_id: Optional[int], expires: int) -> str:
+    payload = f"{merchant_db_id or 0}:{expires}:{secrets.token_urlsafe(12)}"
+    signature = hmac.new(ADMIN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}:{signature}".encode()).decode()
+
+
+def parse_oauth_state(state: str) -> Optional[int]:
+    try:
+        decoded = base64.urlsafe_b64decode(state.encode()).decode()
+        merchant_id, expires, nonce, signature = decoded.split(":", 3)
+        payload = f"{merchant_id}:{expires}:{nonce}"
+        expected = hmac.new(ADMIN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if int(expires) < int(now_utc().timestamp()) or not hmac.compare_digest(expected, signature):
+            return None
+        return int(merchant_id) or 0
+    except Exception:
+        return None
+
+
+def merchant_from_payload(payload: dict, db: Session) -> Optional[MerchantConnection]:
+    merchant_identifier = str(first_value(payload, "merchant.id", "merchant_id", "data.merchant.id") or "")
+    if not merchant_identifier:
+        return None
+    return db.scalar(select(MerchantConnection).where(MerchantConnection.salla_merchant_id == merchant_identifier, MerchantConnection.is_active.is_(True)))
+
+
+def tenant_products(merchant: Optional[MerchantConnection]) -> set[str]:
+    products = merchant.product_ids() if merchant else set()
+    return products or VOUCHER_PRODUCT_IDS
+
+
+def merchant_redeem_code(voucher: Voucher, db: Session) -> str:
+    if voucher.merchant_id:
+        merchant = db.scalar(select(MerchantConnection).where(MerchantConnection.salla_merchant_id == voucher.merchant_id))
+        if merchant and merchant.merchant_code:
+            return merchant.merchant_code
+    return str(MERCHANT_CODES.get(voucher.merchant_name) or MERCHANT_CODES.get("*") or "")
 
 
 def admin_token(username: str, expires: int) -> str:
@@ -204,14 +315,7 @@ def first_value(mapping: dict, *paths: str):
 
 
 def normalize_items(data: dict) -> list[dict]:
-    items = first_value(
-        data,
-        "items",
-        "products",
-        "order.items",
-        "order.products",
-    ) or []
-
+    items = data.get("items") or data.get("products") or []
     return items if isinstance(items, list) else []
 
 
@@ -275,15 +379,17 @@ def send_voucher_email(customer_email: str, customer_name: str, product_name: st
             smtp.starttls(); smtp.login(smtp_user, smtp_password); smtp.send_message(message)
 
 
-def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
+def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7, merchant_id: Optional[str] = None, customer_email: Optional[str] = None, audit_source: str = "system") -> Voucher:
     existing = db.scalar(select(Voucher).where(Voucher.order_id == order_id, Voucher.product_id == product_id))
     if existing:
         return existing
     for _ in range(5):
-        voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, customer_name=customer_name, customer_phone=customer_phone, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
+        voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, merchant_id=merchant_id, customer_name=customer_name, customer_phone=customer_phone, customer_email=customer_email, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
         db.add(voucher)
         try:
-            db.commit(); db.refresh(voucher); return voucher
+            db.commit(); db.refresh(voucher)
+            log_event(db, "voucher_created", voucher.id, f"source={audit_source}; order={order_id}; product={product_id}; merchant={merchant_id or merchant_name}")
+            return voucher
         except Exception:
             db.rollback()
     raise HTTPException(status_code=500, detail="Unable to generate a unique voucher")
@@ -390,7 +496,7 @@ def status_badge(value: str) -> str:
 
 @app.get("/")
 def home():
-    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "admin": BASE_URL + "/admin/login", "database": "connected"}
+    return {"status": "running", "service": "Pakgat Voucher System", "version": "4.0", "admin": BASE_URL + "/admin/login", "database": "connected"}
 
 
 @app.get("/health")
@@ -405,8 +511,7 @@ def create_voucher(payload: VoucherCreate, db: Session = Depends(get_db)):
     existing = db.scalar(select(Voucher).where(Voucher.order_id == payload.order_id, Voucher.product_id == payload.product_id))
     if existing:
         raise HTTPException(status_code=409, detail="A voucher already exists for this order and product.")
-    voucher = create_voucher_record(db, payload.order_id, payload.product_id, payload.product_name, payload.merchant_name, payload.customer_name, payload.customer_phone, payload.option_name, payload.validity_days)
-    log_event(db, "voucher_created", voucher.id, "Created through API")
+    voucher = create_voucher_record(db, payload.order_id, payload.product_id, payload.product_name, payload.merchant_name, payload.customer_name, payload.customer_phone, payload.option_name, payload.validity_days, audit_source="api")
     url = BASE_URL + "/v/" + voucher.verification_token
     return VoucherResponse(code=voucher.code, verification_token=voucher.verification_token, verification_url=url, qr_url=url + "/qr.png", status=voucher.status, expires_at=voucher.expires_at)
 
@@ -550,8 +655,7 @@ async def admin_create_voucher(request: Request, db: Session = Depends(get_db)):
     get = lambda k, d="": f.get(k, [d])[0].strip()
     try:
         validity = max(1, min(365, int(get("validity_days", "7"))))
-        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity)
-        log_event(db, "voucher_created", voucher.id, "Created from admin dashboard")
+        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity, audit_source="admin")
     except Exception as exc:
         return HTMLResponse(page_shell("تعذر الإنشاء", f"<main class='wrap' style='padding:40px 0'><div class='alert alert-error'>تعذر إنشاء القسيمة: {esc(exc)}</div></main>", admin=True), status_code=400)
     return RedirectResponse(f"/admin/vouchers/{voucher.id}?created=1", status_code=303)
@@ -611,7 +715,8 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "admin_redeem_failed": "محاولة استخدام مرفوضة",
         "salla_webhook_rejected": "Webhook مرفوض",
         "salla_webhook_ignored": "Webhook متجاهل",
-        "salla_order_processed": "معالجة طلب سلة",
+        "salla_webhook_received": "استقبال Webhook من سلة",
+        "salla_webhook_processed": "معالجة طلب سلة",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
@@ -622,305 +727,137 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/admin/integrations", response_class=HTMLResponse)
-def admin_integrations(request: Request):
+def admin_integrations(request: Request, db: Session = Depends(get_db)):
     try:
         require_admin(request)
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
+    merchant_count = db.scalar(select(func.count(MerchantConnection.id)).where(MerchantConnection.is_active.is_(True))) or 0
     webhook_ready = bool(SALLA_WEBHOOK_SECRET)
-    products_ready = bool(VOUCHER_PRODUCT_IDS)
+    oauth_ready = bool(SALLA_CLIENT_ID and SALLA_CLIENT_SECRET)
     smtp_ready = all(env(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"))
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>{esc(', '.join(sorted(VOUCHER_PRODUCT_IDS)) or 'غير محدد')}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>OAuth</h3>{state(oauth_ready)}<p class='muted'>SALLA_CLIENT_ID + SECRET</p></div><div class='card' style='padding:20px'><h3>Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>التجار المتصلون</h3><strong style='font-size:28px'>{merchant_count}</strong><p class='muted'>متعدد التجار</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>الإرسال التلقائي</p></div></div><section class='card' style='padding:22px'><div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap'><h2>ربط متجر سلة</h2><a class='btn btn-blue' href='/oauth/salla/start'>ربط متجر جديد</a></div><h3>Redirect URI</h3><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(SALLA_REDIRECT_URI)}'><h3 style='margin-top:20px'>Webhook URL</h3><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><p class='muted'>بعد اكتمال الدفع: تحديد التاجر ← مطابقة منتجاته ← إنشاء القسائم ← إرسالها بالبريد.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
-@app.post("/webhooks/salla")
-async def salla_webhook(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    raw_body = await request.body()
-
-    if not verify_salla_signature(
-        raw_body,
-        request.headers.get("x-salla-signature", ""),
-    ):
-        log_event(
-            db,
-            "salla_webhook_rejected",
-            details="Invalid signature",
-        )
-        return JSONResponse(
-            status_code=401,
-            content={
-                "ok": False,
-                "detail": "Invalid Salla signature.",
-            },
-        )
-
+@app.get("/admin/merchants", response_class=HTMLResponse)
+def admin_merchants(request: Request, db: Session = Depends(get_db)):
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        log_event(
-            db,
-            "salla_webhook_rejected",
-            details="Invalid JSON payload",
-        )
-        return JSONResponse(
-            status_code=400,
-            content={
-                "ok": False,
-                "detail": "Invalid JSON.",
-            },
-        )
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    merchants = list(db.scalars(select(MerchantConnection).order_by(MerchantConnection.created_at.desc())).all())
+    rows = "".join(
+        f"<tr><td>{esc(m.merchant_name)}</td><td dir='ltr'>{esc(m.salla_merchant_id)}</td><td>{esc(', '.join(sorted(m.product_ids())) or 'غير محدد')}</td><td>{'<span class="badge badge-active">متصل</span>' if m.access_token_encrypted else '<span class="badge badge-expired">غير متصل</span>'}</td><td><a class='btn btn-muted' href='/admin/merchants/{m.id}'>إعدادات</a></td></tr>"
+        for m in merchants
+    ) or "<tr><td colspan='5' class='muted'>لا يوجد تجار مرتبطون حتى الآن.</td></tr>"
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><div style='display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap'><h1>التجار</h1><a class='btn btn-blue' href='/oauth/salla/start'>ربط متجر سلة</a></div><section class='card' style='padding:20px'><div class='table-wrap'><table><thead><tr><th>المتجر</th><th>معرف سلة</th><th>منتجات القسائم</th><th>الاتصال</th><th></th></tr></thead><tbody>{rows}</tbody></table></div></section></main>"""
+    return HTMLResponse(page_shell("التجار", body, admin=True))
 
-    event = str(payload.get("event") or "").strip()
-    data = payload.get("data") or {}
 
-    log_event(
-        db,
-        "salla_webhook_received",
-        details=f"Event received: {event or 'unknown'}",
-    )
+@app.get("/admin/merchants/{merchant_id}", response_class=HTMLResponse)
+def admin_merchant_detail(merchant_id: int, request: Request, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    merchant = db.get(MerchantConnection, merchant_id)
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+    products = ",".join(sorted(merchant.product_ids()))
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='padding:24px;max-width:760px;margin:auto'><h1>{esc(merchant.merchant_name)}</h1><form method='post'><label>اسم المتجر</label><input class='input' name='merchant_name' value='{esc(merchant.merchant_name)}' required><label style='margin-top:14px'>معرفات منتجات القسائم (مفصولة بفاصلة)</label><input class='input' dir='ltr' name='product_ids' value='{esc(products)}'><label style='margin-top:14px'>رمز اعتماد التاجر</label><input class='input' dir='ltr' name='merchant_code' value='{esc(merchant.merchant_code or '')}'><label style='margin-top:14px'><input type='checkbox' name='email_enabled' value='1' {'checked' if merchant.email_enabled else ''}> إرسال القسيمة بالبريد تلقائيًا</label><button class='btn btn-blue' style='margin-top:18px' type='submit'>حفظ الإعدادات</button><a class='btn btn-muted' style='margin-top:18px' href='/oauth/salla/start?merchant_id={merchant.id}'>إعادة ربط OAuth</a></form></section></main>"""
+    return HTMLResponse(page_shell("إعدادات التاجر", body, admin=True))
 
-    supported_events = {
-        "order.payment.updated",
-        "order.status.updated",
-        "order.created",
-    }
 
-    if event not in supported_events:
-        log_event(
-            db,
-            "salla_webhook_ignored",
-            details=f"Unsupported event: {event}",
-        )
-        return {
-            "ok": True,
-            "ignored": True,
-            "reason": "Unsupported event.",
-            "event": event,
-        }
+@app.post("/admin/merchants/{merchant_id}")
+async def admin_merchant_update(merchant_id: int, request: Request, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    merchant = db.get(MerchantConnection, merchant_id)
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+    form = parse_qs((await request.body()).decode())
+    get = lambda key, default="": form.get(key, [default])[0].strip()
+    merchant.merchant_name = get("merchant_name", merchant.merchant_name)
+    merchant.product_ids_json = json.dumps([x.strip() for x in get("product_ids").split(",") if x.strip()])
+    merchant.merchant_code = get("merchant_code") or None
+    merchant.email_enabled = get("email_enabled") == "1"
+    merchant.updated_at = now_utc()
+    db.commit()
+    log_event(db, "merchant_settings_updated", details=f"merchant={merchant.salla_merchant_id}")
+    return RedirectResponse(f"/admin/merchants/{merchant.id}", status_code=303)
 
-    payment_status = str(
-        first_value(
-            data,
-            "payment.status.slug",
-            "payment.status",
-            "payment_status",
-            "order.payment.status.slug",
-            "order.payment.status",
-        )
-        or ""
-    ).strip().lower()
 
-    order_status = str(
-        first_value(
-            data,
-            "status.slug",
-            "status.name",
-            "order.status.slug",
-            "order.status.name",
-        )
-        or ""
-    ).strip().lower()
+@app.get("/oauth/salla/start")
+def salla_oauth_start(request: Request, merchant_id: int = 0):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not SALLA_CLIENT_ID or not SALLA_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Salla OAuth credentials are not configured")
+    state = oauth_state(merchant_id or None, int((now_utc() + timedelta(minutes=15)).timestamp()))
+    params = {"client_id": SALLA_CLIENT_ID, "redirect_uri": SALLA_REDIRECT_URI, "response_type": "code", "state": state}
+    if SALLA_OAUTH_SCOPES:
+        params["scope"] = SALLA_OAUTH_SCOPES
+    return RedirectResponse(SALLA_AUTHORIZE_URL + "?" + urlencode(params), status_code=302)
 
-    paid_statuses = {
-        "paid",
-        "completed",
-        "success",
-        "successful",
-        "delivered",
-        "مكتمل",
-        "مدفوع",
-        "تم التنفيذ",
-    }
 
-    is_paid = (
-        payment_status in paid_statuses
-        or order_status in paid_statuses
-    )
+@app.get("/oauth/salla/callback", response_class=HTMLResponse)
+async def salla_oauth_callback(code: str = "", state: str = "", error: str = "", db: Session = Depends(get_db)):
+    merchant_db_id = parse_oauth_state(state)
+    if merchant_db_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    if error or not code:
+        raise HTTPException(status_code=400, detail=error or "Authorization code is missing")
+    async with httpx.AsyncClient(timeout=25) as client:
+        token_response = await client.post(SALLA_TOKEN_URL, data={"grant_type": "authorization_code", "client_id": SALLA_CLIENT_ID, "client_secret": SALLA_CLIENT_SECRET, "redirect_uri": SALLA_REDIRECT_URI, "code": code}, headers={"Accept": "application/json"})
+    if token_response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Salla token exchange failed: {token_response.text[:300]}")
+    token_data = token_response.json()
+    access_token = str(token_data.get("access_token") or "")
+    refresh_token = str(token_data.get("refresh_token") or "")
+    if not access_token:
+        raise HTTPException(status_code=502, detail="Salla did not return an access token")
+    merchant_payload = token_data.get("merchant") if isinstance(token_data.get("merchant"), dict) else {}
+    merchant_identifier = str(first_value(token_data, "merchant.id", "merchant_id", "store.id") or "")
+    merchant_name = str(first_value(token_data, "merchant.name", "merchant.store_name", "store.name") or "متجر سلة")
+    if not merchant_identifier:
+        async with httpx.AsyncClient(timeout=20) as client:
+            info_response = await client.get(SALLA_API_BASE + "/store/info", headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+        if info_response.status_code < 400:
+            info = info_response.json()
+            merchant_identifier = str(first_value(info, "data.id", "id", "merchant.id") or "")
+            merchant_name = str(first_value(info, "data.name", "name", "merchant.name") or merchant_name)
+    if not merchant_identifier:
+        merchant_identifier = "oauth-" + hashlib.sha256(access_token.encode()).hexdigest()[:16]
+    merchant = db.get(MerchantConnection, merchant_db_id) if merchant_db_id else None
+    if merchant is None:
+        merchant = db.scalar(select(MerchantConnection).where(MerchantConnection.salla_merchant_id == merchant_identifier))
+    if merchant is None:
+        merchant = MerchantConnection(salla_merchant_id=merchant_identifier, merchant_name=merchant_name)
+        db.add(merchant)
+    merchant.salla_merchant_id = merchant_identifier
+    merchant.merchant_name = merchant_name
+    merchant.access_token_encrypted = encrypt_secret(access_token)
+    merchant.refresh_token_encrypted = encrypt_secret(refresh_token)
+    try:
+        merchant.token_expires_at = now_utc() + timedelta(seconds=int(token_data.get("expires_in") or 0)) if token_data.get("expires_in") else None
+    except (TypeError, ValueError):
+        merchant.token_expires_at = None
+    merchant.is_active = True
+    merchant.updated_at = now_utc()
+    db.commit(); db.refresh(merchant)
+    log_event(db, "salla_oauth_connected", details=f"merchant={merchant_identifier}")
+    return RedirectResponse(f"/admin/merchants/{merchant.id}", status_code=303)
 
-    if not is_paid:
-        log_event(
-            db,
-            "salla_webhook_ignored",
-            details=(
-                f"Event={event}; "
-                f"order_status={order_status or 'unknown'}; "
-                f"payment_status={payment_status or 'unknown'}"
-            ),
-        )
-        return {
-            "ok": True,
-            "ignored": True,
-            "reason": "Order is not paid or completed.",
-            "event": event,
-            "order_status": order_status,
-            "payment_status": payment_status,
-        }
 
-    base_order_id = str(
-        first_value(
-            data,
-            "id",
-            "order.id",
-            "reference_id",
-            "order.reference_id",
-        )
-        or ""
-    ).strip()
-
-    if not base_order_id:
-        log_event(
-            db,
-            "salla_webhook_rejected",
-            details=f"Order ID missing for event={event}",
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "ok": False,
-                "detail": "Order ID is missing.",
-            },
-        )
-
-    customer_name = str(
-        first_value(
-            data,
-            "customer.name",
-            "customer.first_name",
-            "order.customer.name",
-            "order.customer.first_name",
-        )
-        or "عميل بكجات"
-    )
-
-    customer_email = str(
-        first_value(
-            data,
-            "customer.email",
-            "order.customer.email",
-            "email",
-        )
-        or ""
-    )
-
-    customer_phone = str(
-        first_value(
-            data,
-            "customer.mobile",
-            "customer.phone",
-            "order.customer.mobile",
-            "order.customer.phone",
-            "mobile",
-        )
-        or ""
-    )
-
-    merchant_name = str(
-        first_value(
-            payload,
-            "merchant.name",
-            "merchant.store_name",
-        )
-        or "Pakgat"
-    )
-
-    items = normalize_items(data)
-
-    if not items:
-        log_event(
-            db,
-            "salla_webhook_ignored",
-            details=(
-                f"Order {base_order_id} contains no product items "
-                f"in event {event}"
-            ),
-        )
-        return {
-            "ok": True,
-            "ignored": True,
-            "reason": "No order items were included in the webhook.",
-            "order_id": base_order_id,
-        }
-
-    created = []
-
-    for item in items:
-        product_id = item_product_id(item)
-
-        if product_id not in VOUCHER_PRODUCT_IDS:
-            continue
-
-        quantity = item_quantity(item)
-
-        for index in range(1, quantity + 1):
-            voucher = create_voucher_record(
-                db=db,
-                order_id=f"{base_order_id}:{product_id}:{index}",
-                product_id=product_id,
-                product_name=item_product_name(item),
-                merchant_name=merchant_name,
-                customer_name=customer_name,
-                customer_phone=customer_phone,
-                option_name=item_option_name(item),
-                validity_days=int(
-                    env("DEFAULT_VALIDITY_DAYS", "7")
-                ),
-            )
-
-            verification_url = (
-                BASE_URL + "/v/" + voucher.verification_token
-            )
-
-            created.append(
-                {
-                    "code": voucher.code,
-                    "verification_url": verification_url,
-                }
-            )
-
-            log_event(
-                db,
-                "voucher_created",
-                voucher.id,
-                f"Created from Salla order {base_order_id}",
-            )
-
-            if customer_email:
-                background_tasks.add_task(
-                    send_voucher_email,
-                    customer_email,
-                    customer_name,
-                    voucher.product_name,
-                    voucher.code,
-                    verification_url,
-                    voucher.expires_at,
-                )
-
-    log_event(
-        db,
-        "salla_order_processed",
-        details=(
-            f"Order {base_order_id}; "
-            f"event={event}; "
-            f"created={len(created)}"
-        ),
-    )
-
-    return {
-        "ok": True,
-        "event": event,
-        "order_id": base_order_id,
-        "created_count": len(created),
-        "email_queued": bool(created and customer_email),
-        "vouchers": created,
-    }
+@app.post("/webhooks/salla")
 async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     raw_body = await request.body()
     if not verify_salla_signature(raw_body, request.headers.get("x-salla-signature", "")):
@@ -929,82 +866,47 @@ async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db:
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
+        log_event(db, "salla_webhook_rejected", details="Invalid JSON payload")
         return JSONResponse(status_code=400, content={"ok": False, "detail": "Invalid JSON."})
     event = str(payload.get("event") or "")
     data = payload.get("data") or {}
-    supported_events = {
-    "order.payment.updated",
-    "order.status.updated",
-    "order.created",
-}
-
-if event not in supported_events:
-    log_event(
-        db,
-        "salla_webhook_ignored",
-        details=f"Unsupported event: {event}",
-    )
-    return {
-        "ok": True,
-        "ignored": True,
-        "reason": "Unsupported event.",
-        "event": event,
-    }
+    merchant = merchant_from_payload(payload, db)
+    merchant_identifier = str(first_value(payload, "merchant.id", "merchant_id", "data.merchant.id") or "")
+    log_event(db, "salla_webhook_received", details=f"event={event or 'unknown'}; merchant={merchant_identifier or 'legacy'}")
+    if event != "order.payment.updated":
+        log_event(db, "salla_webhook_ignored", details=f"Unsupported event: {event}")
+        return {"ok": True, "ignored": True, "reason": "Unsupported event."}
     payment_status = str(first_value(data, "payment.status.slug", "payment.status", "payment_status", "status.slug") or "").lower()
-    order_status = str(
-    first_value(
-        data,
-        "status.slug",
-        "status",
-        "order.status.slug",
-        "order.status",
-    )
-)
-paid_statuses = {
-    "paid",
-    "completed",
-    "success",
-    "successful",
-    "delivered",
-    "مكتمل",
-    "مدفوع",
-    "تم التنفيذ",
-}
-
-is_paid = (
-    payment_status in paid_statuses
-    or order_status in paid_statuses
-)
-
-if not is_paid:
-    log_event(
-        db,
-        "salla_webhook_ignored",
-        details=f"Payment status not eligible: {payment_status}",
-    )
-    return {
-        "ok": True,
-        "ignored": True,
-        "reason": "Order payment not completed.",
-    }
+    if payment_status not in {"paid", "completed", "success", "successful"}:
+        log_event(db, "salla_webhook_ignored", details=f"Payment status: {payment_status}")
+        return {"ok": True, "ignored": True, "reason": "Order payment is not paid.", "payment_status": payment_status}
     base_order_id = str(first_value(data, "id", "order.id", "reference_id") or "")
     if not base_order_id:
+        log_event(db, "salla_webhook_rejected", details="Order ID is missing")
         return JSONResponse(status_code=422, content={"ok": False, "detail": "Order ID is missing."})
     customer_name = str(first_value(data, "customer.name", "customer.first_name") or "عميل بكجات")
     customer_email = str(first_value(data, "customer.email", "email") or "")
     customer_phone = str(first_value(data, "customer.mobile", "customer.phone", "mobile") or "")
-    merchant_name = str(first_value(payload, "merchant.name", "merchant.store_name") or "Pakgat")
+    merchant_name = merchant.merchant_name if merchant else str(first_value(payload, "merchant.name", "merchant.store_name") or "Pakgat")
+    allowed_products = tenant_products(merchant)
+    if not allowed_products:
+        log_event(db, "salla_webhook_ignored", details=f"No voucher products configured for merchant={merchant_identifier or 'legacy'}")
+        return {"ok": True, "ignored": True, "reason": "No voucher products configured."}
     created = []
     for item in normalize_items(data):
         product_id = item_product_id(item)
-        if product_id not in VOUCHER_PRODUCT_IDS:
+        if product_id not in allowed_products:
             continue
         for index in range(1, item_quantity(item) + 1):
-            voucher = create_voucher_record(db, f"{base_order_id}:{product_id}:{index}", product_id, item_product_name(item), merchant_name, customer_name, customer_phone, item_option_name(item), int(env("DEFAULT_VALIDITY_DAYS", "7")))
+            voucher = create_voucher_record(
+                db, f"{base_order_id}:{product_id}:{index}", product_id, item_product_name(item), merchant_name,
+                customer_name, customer_phone, item_option_name(item), int(env("DEFAULT_VALIDITY_DAYS", "7")),
+                merchant_id=merchant_identifier or None, customer_email=customer_email or None, audit_source="salla",
+            )
             verification_url = BASE_URL + "/v/" + voucher.verification_token
             created.append({"code": voucher.code, "verification_url": verification_url})
-            log_event(db, "voucher_created", voucher.id, f"Created from Salla order {base_order_id}")
-            if customer_email:
+            if customer_email and (merchant is None or merchant.email_enabled):
                 background_tasks.add_task(send_voucher_email, customer_email, customer_name, voucher.product_name, voucher.code, verification_url, voucher.expires_at)
-    log_event(db, "salla_webhook_processed", details=f"Order {base_order_id}; created {len(created)} voucher(s)")
-    return {"ok": True, "event": event, "created_count": len(created), "email_queued": bool(created and customer_email), "vouchers": created}
+    log_event(db, "salla_webhook_processed", details=f"order={base_order_id}; merchant={merchant_identifier or 'legacy'}; created={len(created)}")
+    return {"ok": True, "event": event, "merchant_id": merchant_identifier or None, "created_count": len(created), "email_queued": bool(created and customer_email and (merchant is None or merchant.email_enabled)), "vouchers": created}
+

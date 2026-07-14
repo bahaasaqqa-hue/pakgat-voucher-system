@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+jinja2
+python-multipart
+qrcode
+pillow
+sqlalchemy
+psycopg[binary]
+httpx
+cryptography
