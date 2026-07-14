@@ -1,1 +1,0 @@
-"""Pakgat voucher application package."""
