@@ -1,38 +1,35 @@
-# Pakgat Voucher System
+# Pakgat Voucher System v2.2
 
-FastAPI + PostgreSQL voucher/QR system for Pakgat.
+FastAPI voucher and QR service for Pakgat.
 
-## Main URLs
+## Included
+- Voucher creation, verification, QR and atomic redemption
+- PostgreSQL persistence
+- Admin dashboard and manual voucher creation
+- Audit log at `/admin/audit`
+- Salla readiness page at `/admin/integrations`
+- Salla webhook at `/webhooks/salla`
+- Customer and merchant terms
 
-- `/docs` Swagger API
-- `/admin/login` Admin login
-- `/admin` Admin dashboard
-- `/v/{token}` Customer voucher page
-- `/webhooks/salla` Salla payment webhook
+## Render start command
+```bash
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
 
-## Required Render environment variables
+## Required environment variables
+- `DATABASE_URL`
+- `PUBLIC_BASE_URL`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `ADMIN_SECRET`
+- `SALLA_WEBHOOK_SECRET`
+- `VOUCHER_PRODUCT_IDS` (comma-separated Salla product IDs)
+- `MERCHANT_CODES` (JSON, e.g. `{"Pakgat":"1234","*":"9999"}`)
 
-- `DATABASE_URL` (already provided by Render database)
-- `PUBLIC_BASE_URL=https://pakgat-voucher-system.onrender.com`
-- `ADMIN_USERNAME=admin` (or another username)
-- `ADMIN_PASSWORD=<strong password>`
-- `ADMIN_SECRET=<long random secret>`
-- `MERCHANT_CODES={"Pakgat":"123456","*":"123456"}`
-- `SALLA_WEBHOOK_SECRET=<Salla webhook secret>`
-- `VOUCHER_PRODUCT_IDS=782332771` (comma-separated)
-- `DEFAULT_VALIDITY_DAYS=7`
-
-Optional email variables:
-
+## Optional email variables
 - `SMTP_HOST`
-- `SMTP_PORT=587`
-- `SMTP_USER`
+- `SMTP_PORT` (default `587`)
+- `SMTP_USERNAME`
 - `SMTP_PASSWORD`
 - `SMTP_FROM`
-
-## Run locally
-
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
+- `SMTP_USE_TLS` (default `true`)
