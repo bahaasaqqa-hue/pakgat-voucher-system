@@ -10,7 +10,6 @@ from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-import math
 from urllib.parse import parse_qs, quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
@@ -123,6 +122,10 @@ def generate_verification_token() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # Populate the audit table for vouchers created before audit logging was added.
+    # The operation is idempotent, so every deployment can run it safely.
+    with SessionLocal() as db:
+        backfill_audit_logs(db)
     yield
 
 
@@ -140,7 +143,7 @@ try:
 except json.JSONDecodeError:
     MERCHANT_CODES = {}
 
-VOUCHER_PRODUCT_IDS = {v.strip() for v in env("VOUCHER_PRODUCT_IDS", "782332771").split(",") if v.strip()}
+VOUCHER_PRODUCT_IDS = {v.strip() for v in env("VOUCHER_PRODUCT_IDS", "").split(",") if v.strip()}
 
 
 BASE_CSS = """
@@ -273,17 +276,84 @@ def create_voucher_record(db: Session, order_id: str, product_id: str, product_n
         voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, customer_name=customer_name, customer_phone=customer_phone, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
         db.add(voucher)
         try:
-            db.commit(); db.refresh(voucher)
-            log_event(db, "voucher_created", voucher.id, f"order={order_id}; product={product_id}")
-            return voucher
+            db.commit(); db.refresh(voucher); return voucher
         except Exception:
             db.rollback()
     raise HTTPException(status_code=500, detail="Unable to generate a unique voucher")
 
 
-def log_event(db: Session, action: str, voucher_id: Optional[int] = None, details: Optional[str] = None) -> None:
-    db.add(AuditLog(voucher_id=voucher_id, action=action, details=(details or "")[:500] or None))
+def log_event(
+    db: Session,
+    action: str,
+    voucher_id: Optional[int] = None,
+    details: Optional[str] = None,
+    created_at: Optional[datetime] = None,
+) -> None:
+    db.add(
+        AuditLog(
+            voucher_id=voucher_id,
+            action=action,
+            details=(details or "")[:500] or None,
+            created_at=created_at or now_utc(),
+        )
+    )
     db.commit()
+
+
+def backfill_audit_logs(db: Session) -> int:
+    """Create missing historical audit entries without duplicating existing logs."""
+    vouchers = list(db.scalars(select(Voucher).order_by(Voucher.id)).all())
+    if not vouchers:
+        return 0
+
+    existing = set(
+        db.execute(
+            select(AuditLog.voucher_id, AuditLog.action).where(AuditLog.voucher_id.is_not(None))
+        ).all()
+    )
+    added = 0
+    for voucher in vouchers:
+        created_key = (voucher.id, "voucher_created")
+        if created_key not in existing:
+            db.add(
+                AuditLog(
+                    voucher_id=voucher.id,
+                    action="voucher_created",
+                    details="Historical voucher imported into audit log",
+                    created_at=voucher.created_at or now_utc(),
+                )
+            )
+            added += 1
+
+        if voucher.status == "redeemed" and voucher.redeemed_at:
+            redeemed_key = (voucher.id, "voucher_redeemed")
+            if redeemed_key not in existing:
+                db.add(
+                    AuditLog(
+                        voucher_id=voucher.id,
+                        action="voucher_redeemed",
+                        details="Historical redemption imported into audit log",
+                        created_at=voucher.redeemed_at,
+                    )
+                )
+                added += 1
+
+        if voucher.status == "expired":
+            expired_key = (voucher.id, "voucher_expired")
+            if expired_key not in existing:
+                db.add(
+                    AuditLog(
+                        voucher_id=voucher.id,
+                        action="voucher_expired",
+                        details="Historical expiration imported into audit log",
+                        created_at=voucher.expires_at or now_utc(),
+                    )
+                )
+                added += 1
+
+    if added:
+        db.commit()
+    return added
 
 
 def update_voucher_status(voucher: Voucher, db: Session) -> str:
@@ -291,7 +361,18 @@ def update_voucher_status(voucher: Voucher, db: Session) -> str:
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     if voucher.status == "active" and expires < now_utc():
-        voucher.status = "expired"; db.commit(); db.refresh(voucher)
+        voucher.status = "expired"
+        db.commit()
+        db.refresh(voucher)
+        # Write the expiration only after the voucher update succeeds.
+        existing = db.scalar(
+            select(AuditLog.id).where(
+                AuditLog.voucher_id == voucher.id,
+                AuditLog.action == "voucher_expired",
+            )
+        )
+        if not existing:
+            log_event(db, "voucher_expired", voucher.id, "Voucher expired automatically", expires)
     return voucher.status
 
 
@@ -318,6 +399,7 @@ def create_voucher(payload: VoucherCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=409, detail="A voucher already exists for this order and product.")
     voucher = create_voucher_record(db, payload.order_id, payload.product_id, payload.product_name, payload.merchant_name, payload.customer_name, payload.customer_phone, payload.option_name, payload.validity_days)
+    log_event(db, "voucher_created", voucher.id, "Created through API")
     url = BASE_URL + "/v/" + voucher.verification_token
     return VoucherResponse(code=voucher.code, verification_token=voucher.verification_token, verification_url=url, qr_url=url + "/qr.png", status=voucher.status, expires_at=voucher.expires_at)
 
@@ -428,21 +510,16 @@ def admin_dashboard(request: Request, q: str = "", voucher_status: str = "", pag
     if voucher_status in {"active", "redeemed", "expired"}:
         filters.append(Voucher.status == voucher_status)
     total_filtered = db.scalar(select(func.count(Voucher.id)).where(*filters)) or 0
-    total_pages = max(1, math.ceil(total_filtered / page_size))
+    total_pages = max(1, (total_filtered + page_size - 1) // page_size)
     page = min(page, total_pages)
     statement = select(Voucher).where(*filters).order_by(Voucher.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     vouchers = list(db.scalars(statement).all())
     counts = dict(db.execute(select(Voucher.status, func.count(Voucher.id)).group_by(Voucher.status)).all())
     rows = "".join(f"<tr><td><a style='color:#2446ba;font-weight:900' href='/admin/vouchers/{v.id}'>{esc(v.code)}</a></td><td>{esc(v.customer_name or '—')}</td><td>{esc(v.product_name)}</td><td>{status_badge(v.status)}</td><td>{fmt_dt(v.expires_at)}</td><td><a class='btn btn-muted' href='/admin/vouchers/{v.id}'>عرض</a></td></tr>" for v in vouchers) or "<tr><td colspan='6' style='text-align:center;padding:30px'>لا توجد نتائج.</td></tr>"
-    query_suffix = f"q={quote(q)}&voucher_status={quote(voucher_status)}"
-    pager = "<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap'>"
-    pager += f"<span class='muted'>صفحة {page} من {total_pages} — {total_filtered} نتيجة</span><div style='display:flex;gap:8px'>"
-    if page > 1:
-        pager += f"<a class='btn btn-muted' href='/admin?{query_suffix}&page={page-1}'>السابق</a>"
-    if page < total_pages:
-        pager += f"<a class='btn btn-muted' href='/admin?{query_suffix}&page={page+1}'>التالي</a>"
-    pager += "</div></div>"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>لوحة إدارة القسائم</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin-bottom:18px'><div class='card' style='padding:18px'><div class='muted'>الإجمالي</div><strong style='font-size:29px'>{sum(counts.values())}</strong></div><div class='card' style='padding:18px'><div class='muted'>صالحة</div><strong style='font-size:29px;color:#15803d'>{counts.get('active',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>مستخدمة</div><strong style='font-size:29px;color:#b91c1c'>{counts.get('redeemed',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>منتهية</div><strong style='font-size:29px;color:#a16207'>{counts.get('expired',0)}</strong></div></div><section class='card' style='padding:18px'><form method='get' action='/admin' class='grid grid-mobile-1' style='grid-template-columns:2fr 1fr auto;align-items:end'><div><label>البحث</label><input class='input' name='q' value='{esc(q)}' placeholder='كود القسيمة، العميل، الطلب أو العرض'></div><div><label>الحالة</label><select class='select' name='voucher_status'><option value=''>الكل</option><option value='active' {'selected' if voucher_status=='active' else ''}>صالحة</option><option value='redeemed' {'selected' if voucher_status=='redeemed' else ''}>مستخدمة</option><option value='expired' {'selected' if voucher_status=='expired' else ''}>منتهية</option></select></div><button class='btn btn-blue' type='submit'>بحث</button></form><div class='table-wrap' style='margin-top:18px'><table><thead><tr><th>الكود</th><th>العميل</th><th>العرض</th><th>الحالة</th><th>الانتهاء</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>{pager}</section></main>"""
+    prev_link = f"/admin?q={quote(q)}&voucher_status={quote(voucher_status)}&page={page-1}" if page > 1 else ""
+    next_link = f"/admin?q={quote(q)}&voucher_status={quote(voucher_status)}&page={page+1}" if page < total_pages else ""
+    pagination = f"<div style='display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px'>{f'<a class=\"btn btn-muted\" href=\"{prev_link}\">السابق</a>' if prev_link else ''}<strong>صفحة {page} من {total_pages}</strong>{f'<a class=\"btn btn-muted\" href=\"{next_link}\">التالي</a>' if next_link else ''}</div>"
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>لوحة إدارة القسائم</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin-bottom:18px'><div class='card' style='padding:18px'><div class='muted'>الإجمالي</div><strong style='font-size:29px'>{sum(counts.values())}</strong></div><div class='card' style='padding:18px'><div class='muted'>صالحة</div><strong style='font-size:29px;color:#15803d'>{counts.get('active',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>مستخدمة</div><strong style='font-size:29px;color:#b91c1c'>{counts.get('redeemed',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>منتهية</div><strong style='font-size:29px;color:#a16207'>{counts.get('expired',0)}</strong></div></div><section class='card' style='padding:18px'><form method='get' action='/admin' class='grid grid-mobile-1' style='grid-template-columns:2fr 1fr auto;align-items:end'><div><label>البحث</label><input class='input' name='q' value='{esc(q)}' placeholder='كود القسيمة، العميل، الطلب أو العرض'></div><div><label>الحالة</label><select class='select' name='voucher_status'><option value=''>الكل</option><option value='active' {'selected' if voucher_status=='active' else ''}>صالحة</option><option value='redeemed' {'selected' if voucher_status=='redeemed' else ''}>مستخدمة</option><option value='expired' {'selected' if voucher_status=='expired' else ''}>منتهية</option></select></div><button class='btn btn-blue' type='submit'>بحث</button></form><div class='table-wrap' style='margin-top:18px'><table><thead><tr><th>الكود</th><th>العميل</th><th>العرض</th><th>الحالة</th><th>الانتهاء</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>{pagination}</section></main>"""
     return HTMLResponse(page_shell("لوحة الإدارة", body, admin=True))
 
 
@@ -467,6 +544,7 @@ async def admin_create_voucher(request: Request, db: Session = Depends(get_db)):
     try:
         validity = max(1, min(365, int(get("validity_days", "7"))))
         voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity)
+        log_event(db, "voucher_created", voucher.id, "Created from admin dashboard")
     except Exception as exc:
         return HTMLResponse(page_shell("تعذر الإنشاء", f"<main class='wrap' style='padding:40px 0'><div class='alert alert-error'>تعذر إنشاء القسيمة: {esc(exc)}</div></main>", admin=True), status_code=400)
     return RedirectResponse(f"/admin/vouchers/{voucher.id}?created=1", status_code=303)
@@ -513,17 +591,23 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
     logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)).all()
+    voucher_ids = {item.voucher_id for item in logs if item.voucher_id is not None}
+    voucher_codes = {}
+    if voucher_ids:
+        voucher_codes = dict(
+            db.execute(select(Voucher.id, Voucher.code).where(Voucher.id.in_(voucher_ids))).all()
+        )
     action_labels = {
         "voucher_created": "إنشاء قسيمة",
-        "voucher_redeemed": "اعتماد القسيمة",
-        "admin_redeem_failed": "محاولة اعتماد مرفوضة",
-        "merchant_redeem_failed": "محاولة تاجر مرفوضة",
-        "webhook_received": "استقبال Webhook",
-        "webhook_ignored": "Webhook تم تجاهله",
-        "webhook_vouchers_created": "إنشاء قسائم من سلة",
+        "voucher_redeemed": "استخدام القسيمة",
+        "voucher_expired": "انتهاء القسيمة",
+        "admin_redeem_failed": "محاولة استخدام مرفوضة",
+        "salla_webhook_rejected": "Webhook مرفوض",
+        "salla_webhook_ignored": "Webhook متجاهل",
+        "salla_order_processed": "معالجة طلب سلة",
     }
     rows = "".join(
-        f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(item.voucher_id or '—')}</td><td>{esc(item.details or '—')}</td></tr>"
+        f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
         for item in logs
     ) or "<tr><td colspan='4' class='muted'>لا توجد عمليات مسجلة حتى الآن.</td></tr>"
     body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='padding:20px'><h1>سجل العمليات</h1><p class='muted'>آخر 200 عملية على نظام القسائم.</p><div class='table-wrap'><table><thead><tr><th>التاريخ</th><th>العملية</th><th>رقم القسيمة</th><th>التفاصيل</th></tr></thead><tbody>{rows}</tbody></table></div></section></main>"""
@@ -538,12 +622,11 @@ def admin_integrations(request: Request):
         return RedirectResponse("/admin/login", status_code=303)
     webhook_ready = bool(SALLA_WEBHOOK_SECRET)
     products_ready = bool(VOUCHER_PRODUCT_IDS)
-    admin_ready = bool(ADMIN_PASSWORD) and ADMIN_SECRET != "change-this-admin-secret"
     smtp_ready = all(env(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"))
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>{esc(', '.join(sorted(VOUCHER_PRODUCT_IDS)) or 'غير محدد')}</p></div><div class='card' style='padding:20px'><h3>حماية الإدارة</h3>{state(admin_ready)}<p class='muted'>ADMIN_PASSWORD + ADMIN_SECRET</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>{esc(', '.join(sorted(VOUCHER_PRODUCT_IDS)) or 'غير محدد')}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
@@ -551,6 +634,7 @@ def admin_integrations(request: Request):
 async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     raw_body = await request.body()
     if not verify_salla_signature(raw_body, request.headers.get("x-salla-signature", "")):
+        log_event(db, "salla_webhook_rejected", details="Invalid signature")
         return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid Salla signature."})
     try:
         payload = json.loads(raw_body.decode("utf-8"))
@@ -558,13 +642,12 @@ async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db:
         return JSONResponse(status_code=400, content={"ok": False, "detail": "Invalid JSON."})
     event = str(payload.get("event") or "")
     data = payload.get("data") or {}
-    log_event(db, "webhook_received", None, f"event={event or 'unknown'}")
     if event != "order.payment.updated":
-        log_event(db, "webhook_ignored", None, f"unsupported event={event}")
+        log_event(db, "salla_webhook_ignored", details=f"Unsupported event: {event}")
         return {"ok": True, "ignored": True, "reason": "Unsupported event."}
     payment_status = str(first_value(data, "payment.status.slug", "payment.status", "payment_status", "status.slug") or "").lower()
     if payment_status not in {"paid", "completed", "success", "successful"}:
-        log_event(db, "webhook_ignored", None, f"payment_status={payment_status}")
+        log_event(db, "salla_webhook_ignored", details=f"Payment status: {payment_status}")
         return {"ok": True, "ignored": True, "reason": "Order payment is not paid.", "payment_status": payment_status}
     base_order_id = str(first_value(data, "id", "order.id", "reference_id") or "")
     if not base_order_id:
@@ -582,7 +665,8 @@ async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db:
             voucher = create_voucher_record(db, f"{base_order_id}:{product_id}:{index}", product_id, item_product_name(item), merchant_name, customer_name, customer_phone, item_option_name(item), int(env("DEFAULT_VALIDITY_DAYS", "7")))
             verification_url = BASE_URL + "/v/" + voucher.verification_token
             created.append({"code": voucher.code, "verification_url": verification_url})
+            log_event(db, "voucher_created", voucher.id, f"Created from Salla order {base_order_id}")
             if customer_email:
                 background_tasks.add_task(send_voucher_email, customer_email, customer_name, voucher.product_name, voucher.code, verification_url, voucher.expires_at)
-    log_event(db, "webhook_vouchers_created", None, f"order={base_order_id}; count={len(created)}")
+    log_event(db, "salla_webhook_processed", details=f"Order {base_order_id}; created {len(created)} voucher(s)")
     return {"ok": True, "event": event, "created_count": len(created), "email_queued": bool(created and customer_email), "vouchers": created}
