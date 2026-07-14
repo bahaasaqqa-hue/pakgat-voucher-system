@@ -716,23 +716,13 @@ async def salla_webhook(
         or ""
     ).strip().lower()
 
-    paid_statuses = {
+    is_paid = payment_status in {
         "paid",
         "completed",
         "success",
         "successful",
-        "delivered",
-        "مكتمل",
-        "مدفوع",
-        "تم التنفيذ",
     }
 
-is_paid = payment_status in {
-    "paid",
-    "completed",
-    "success",
-    "successful",
-}
     if not is_paid:
         log_event(
             db,
