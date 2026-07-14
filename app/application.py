@@ -211,7 +211,6 @@ def normalize_items(data: dict) -> list[dict]:
         "order.items",
         "order.products",
     ) or []
-
     return items if isinstance(items, list) else []
 
 
@@ -649,33 +648,19 @@ async def salla_webhook(
         raw_body,
         request.headers.get("x-salla-signature", ""),
     ):
-        log_event(
-            db,
-            "salla_webhook_rejected",
-            details="Invalid signature",
-        )
+        log_event(db, "salla_webhook_rejected", details="Invalid signature")
         return JSONResponse(
             status_code=401,
-            content={
-                "ok": False,
-                "detail": "Invalid Salla signature.",
-            },
+            content={"ok": False, "detail": "Invalid Salla signature."},
         )
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        log_event(
-            db,
-            "salla_webhook_rejected",
-            details="Invalid JSON payload",
-        )
+        log_event(db, "salla_webhook_rejected", details="Invalid JSON payload")
         return JSONResponse(
             status_code=400,
-            content={
-                "ok": False,
-                "detail": "Invalid JSON.",
-            },
+            content={"ok": False, "detail": "Invalid JSON."},
         )
 
     event = str(payload.get("event") or "").strip()
@@ -723,8 +708,10 @@ async def salla_webhook(
             data,
             "status.slug",
             "status.name",
+            "status",
             "order.status.slug",
             "order.status.name",
+            "order.status",
         )
         or ""
     ).strip().lower()
@@ -740,18 +727,14 @@ async def salla_webhook(
         "تم التنفيذ",
     }
 
-    is_paid = (
-        payment_status in paid_statuses
-        or order_status in paid_statuses
-    )
+    is_paid = payment_status in paid_statuses or order_status in paid_statuses
 
     if not is_paid:
         log_event(
             db,
             "salla_webhook_ignored",
             details=(
-                f"Event={event}; "
-                f"order_status={order_status or 'unknown'}; "
+                f"Event={event}; order_status={order_status or 'unknown'}; "
                 f"payment_status={payment_status or 'unknown'}"
             ),
         )
@@ -783,10 +766,7 @@ async def salla_webhook(
         )
         return JSONResponse(
             status_code=422,
-            content={
-                "ok": False,
-                "detail": "Order ID is missing.",
-            },
+            content={"ok": False, "detail": "Order ID is missing."},
         )
 
     customer_name = str(
@@ -799,17 +779,10 @@ async def salla_webhook(
         )
         or "عميل بكجات"
     )
-
     customer_email = str(
-        first_value(
-            data,
-            "customer.email",
-            "order.customer.email",
-            "email",
-        )
+        first_value(data, "customer.email", "order.customer.email", "email")
         or ""
     )
-
     customer_phone = str(
         first_value(
             data,
@@ -821,26 +794,16 @@ async def salla_webhook(
         )
         or ""
     )
-
     merchant_name = str(
-        first_value(
-            payload,
-            "merchant.name",
-            "merchant.store_name",
-        )
-        or "Pakgat"
+        first_value(payload, "merchant.name", "merchant.store_name") or "Pakgat"
     )
 
     items = normalize_items(data)
-
     if not items:
         log_event(
             db,
             "salla_webhook_ignored",
-            details=(
-                f"Order {base_order_id} contains no product items "
-                f"in event {event}"
-            ),
+            details=f"Order {base_order_id} contains no product items in event {event}",
         )
         return {
             "ok": True,
@@ -850,16 +813,12 @@ async def salla_webhook(
         }
 
     created = []
-
     for item in items:
         product_id = item_product_id(item)
-
         if product_id not in VOUCHER_PRODUCT_IDS:
             continue
 
-        quantity = item_quantity(item)
-
-        for index in range(1, quantity + 1):
+        for index in range(1, item_quantity(item) + 1):
             voucher = create_voucher_record(
                 db=db,
                 order_id=f"{base_order_id}:{product_id}:{index}",
@@ -869,29 +828,18 @@ async def salla_webhook(
                 customer_name=customer_name,
                 customer_phone=customer_phone,
                 option_name=item_option_name(item),
-                validity_days=int(
-                    env("DEFAULT_VALIDITY_DAYS", "7")
-                ),
+                validity_days=int(env("DEFAULT_VALIDITY_DAYS", "7")),
             )
-
-            verification_url = (
-                BASE_URL + "/v/" + voucher.verification_token
-            )
-
+            verification_url = BASE_URL + "/v/" + voucher.verification_token
             created.append(
-                {
-                    "code": voucher.code,
-                    "verification_url": verification_url,
-                }
+                {"code": voucher.code, "verification_url": verification_url}
             )
-
             log_event(
                 db,
                 "voucher_created",
                 voucher.id,
                 f"Created from Salla order {base_order_id}",
             )
-
             if customer_email:
                 background_tasks.add_task(
                     send_voucher_email,
@@ -906,13 +854,8 @@ async def salla_webhook(
     log_event(
         db,
         "salla_order_processed",
-        details=(
-            f"Order {base_order_id}; "
-            f"event={event}; "
-            f"created={len(created)}"
-        ),
+        details=f"Order {base_order_id}; event={event}; created={len(created)}",
     )
-
     return {
         "ok": True,
         "event": event,
@@ -921,90 +864,4 @@ async def salla_webhook(
         "email_queued": bool(created and customer_email),
         "vouchers": created,
     }
-async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    raw_body = await request.body()
-    if not verify_salla_signature(raw_body, request.headers.get("x-salla-signature", "")):
-        log_event(db, "salla_webhook_rejected", details="Invalid signature")
-        return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid Salla signature."})
-    try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return JSONResponse(status_code=400, content={"ok": False, "detail": "Invalid JSON."})
-    event = str(payload.get("event") or "")
-    data = payload.get("data") or {}
-    supported_events = {
-    "order.payment.updated",
-    "order.status.updated",
-    "order.created",
-}
 
-if event not in supported_events:
-    log_event(
-        db,
-        "salla_webhook_ignored",
-        details=f"Unsupported event: {event}",
-    )
-    return {
-        "ok": True,
-        "ignored": True,
-        "reason": "Unsupported event.",
-        "event": event,
-    }
-    payment_status = str(first_value(data, "payment.status.slug", "payment.status", "payment_status", "status.slug") or "").lower()
-    order_status = str(
-    first_value(
-        data,
-        "status.slug",
-        "status",
-        "order.status.slug",
-        "order.status",
-    )
-)
-paid_statuses = {
-    "paid",
-    "completed",
-    "success",
-    "successful",
-    "delivered",
-    "مكتمل",
-    "مدفوع",
-    "تم التنفيذ",
-}
-
-is_paid = (
-    payment_status in paid_statuses
-    or order_status in paid_statuses
-)
-
-if not is_paid:
-    log_event(
-        db,
-        "salla_webhook_ignored",
-        details=f"Payment status not eligible: {payment_status}",
-    )
-    return {
-        "ok": True,
-        "ignored": True,
-        "reason": "Order payment not completed.",
-    }
-    base_order_id = str(first_value(data, "id", "order.id", "reference_id") or "")
-    if not base_order_id:
-        return JSONResponse(status_code=422, content={"ok": False, "detail": "Order ID is missing."})
-    customer_name = str(first_value(data, "customer.name", "customer.first_name") or "عميل بكجات")
-    customer_email = str(first_value(data, "customer.email", "email") or "")
-    customer_phone = str(first_value(data, "customer.mobile", "customer.phone", "mobile") or "")
-    merchant_name = str(first_value(payload, "merchant.name", "merchant.store_name") or "Pakgat")
-    created = []
-    for item in normalize_items(data):
-        product_id = item_product_id(item)
-        if product_id not in VOUCHER_PRODUCT_IDS:
-            continue
-        for index in range(1, item_quantity(item) + 1):
-            voucher = create_voucher_record(db, f"{base_order_id}:{product_id}:{index}", product_id, item_product_name(item), merchant_name, customer_name, customer_phone, item_option_name(item), int(env("DEFAULT_VALIDITY_DAYS", "7")))
-            verification_url = BASE_URL + "/v/" + voucher.verification_token
-            created.append({"code": voucher.code, "verification_url": verification_url})
-            log_event(db, "voucher_created", voucher.id, f"Created from Salla order {base_order_id}")
-            if customer_email:
-                background_tasks.add_task(send_voucher_email, customer_email, customer_name, voucher.product_name, voucher.code, verification_url, voucher.expires_at)
-    log_event(db, "salla_webhook_processed", details=f"Order {base_order_id}; created {len(created)} voucher(s)")
-    return {"ok": True, "event": event, "created_count": len(created), "email_queued": bool(created and customer_email), "vouchers": created}
