@@ -932,13 +932,61 @@ async def salla_webhook(request: Request, background_tasks: BackgroundTasks, db:
         return JSONResponse(status_code=400, content={"ok": False, "detail": "Invalid JSON."})
     event = str(payload.get("event") or "")
     data = payload.get("data") or {}
-    if event != "order.payment.updated":
-        log_event(db, "salla_webhook_ignored", details=f"Unsupported event: {event}")
-        return {"ok": True, "ignored": True, "reason": "Unsupported event."}
+    supported_events = {
+    "order.payment.updated",
+    "order.status.updated",
+    "order.created",
+}
+
+if event not in supported_events:
+    log_event(
+        db,
+        "salla_webhook_ignored",
+        details=f"Unsupported event: {event}",
+    )
+    return {
+        "ok": True,
+        "ignored": True,
+        "reason": "Unsupported event.",
+        "event": event,
+    }
     payment_status = str(first_value(data, "payment.status.slug", "payment.status", "payment_status", "status.slug") or "").lower()
-    if payment_status not in {"paid", "completed", "success", "successful"}:
-        log_event(db, "salla_webhook_ignored", details=f"Payment status: {payment_status}")
-        return {"ok": True, "ignored": True, "reason": "Order payment is not paid.", "payment_status": payment_status}
+    order_status = str(
+    first_value(
+        data,
+        "status.slug",
+        "status",
+        "order.status.slug",
+        "order.status",
+    )
+)
+paid_statuses = {
+    "paid",
+    "completed",
+    "success",
+    "successful",
+    "delivered",
+    "مكتمل",
+    "مدفوع",
+    "تم التنفيذ",
+}
+
+is_paid = (
+    payment_status in paid_statuses
+    or order_status in paid_statuses
+)
+
+if not is_paid:
+    log_event(
+        db,
+        "salla_webhook_ignored",
+        details=f"Payment status not eligible: {payment_status}",
+    )
+    return {
+        "ok": True,
+        "ignored": True,
+        "reason": "Order payment not completed.",
+    }
     base_order_id = str(first_value(data, "id", "order.id", "reference_id") or "")
     if not base_order_id:
         return JSONResponse(status_code=422, content={"ok": False, "detail": "Order ID is missing."})
