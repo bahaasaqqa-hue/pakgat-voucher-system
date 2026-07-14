@@ -1,4 +1,4 @@
-# Pakgat Voucher System v2.2
+# Pakgat Voucher System v3.0
 
 FastAPI voucher and QR service for Pakgat.
 
@@ -29,7 +29,15 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 ## Optional email variables
 - `SMTP_HOST`
 - `SMTP_PORT` (default `587`)
-- `SMTP_USERNAME`
+- `SMTP_USER`
 - `SMTP_PASSWORD`
 - `SMTP_FROM`
 - `SMTP_USE_TLS` (default `true`)
+
+
+## v3.0 changes
+- Dashboard pagination (25 vouchers per page)
+- Audit logging for API/admin/Salla voucher creation
+- Salla webhook rejection and ignore logging
+- Correct SMTP readiness check (`SMTP_USER`)
+- No hard-coded default Salla product ID
