@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 import hashlib
 import hmac
@@ -8,6 +9,7 @@ from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import parse_qs
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -185,6 +187,14 @@ BASE_URL = os.getenv(
 ).rstrip("/")
 
 SALLA_WEBHOOK_SECRET = os.getenv("SALLA_WEBHOOK_SECRET", "")
+
+try:
+    MERCHANT_CODES = json.loads(
+        os.getenv("MERCHANT_CODES", "{}")
+    )
+except json.JSONDecodeError:
+    MERCHANT_CODES = {}
+
 VOUCHER_PRODUCT_IDS = {
     value.strip()
     for value in os.getenv(
@@ -536,6 +546,7 @@ def update_voucher_status(
 
 def build_verification_page(
     voucher: Voucher,
+    error_message: Optional[str] = None,
 ) -> str:
     if voucher.status == "active":
         status_title = "القسيمة صالحة"
@@ -564,10 +575,38 @@ def build_verification_page(
     redeem_section = ""
 
     if voucher.status == "active":
+        error_box = ""
+
+        if error_message:
+            error_box = f"""
+            <div class="error-box">
+                {error_message}
+            </div>
+            """
+
         redeem_section = f"""
+        {error_box}
+
         <form method="post"
               action="/v/{voucher.verification_token}/redeem"
               onsubmit="return confirm('هل أنت متأكد من تسليم الخدمة للعميل؟');">
+
+            <label class="merchant-code-label"
+                   for="merchant_code">
+                رمز التاجر
+            </label>
+
+            <input
+                id="merchant_code"
+                name="merchant_code"
+                class="merchant-code-input"
+                type="password"
+                inputmode="numeric"
+                autocomplete="off"
+                maxlength="20"
+                placeholder="أدخل رمز التاجر"
+                required
+            >
 
             <button type="submit" class="redeem-button">
                 تأكيد تسليم الخدمة للعميل
@@ -578,7 +617,7 @@ def build_verification_page(
             <strong>تعليمات للموظف</strong>
             <p>رحّب بعميلك وعميل بكجات بابتسامة.</p>
             <p>تأكد من مطابقة الخدمة قبل الضغط على الزر.</p>
-            <p>اضغط الزر قبل بدء تقديم الخدمة.</p>
+            <p>أدخل رمز التاجر ثم أكد تقديم الخدمة.</p>
             <p>بعد الاعتماد لن يمكن استخدام القسيمة مرة أخرى.</p>
         </div>
         """
@@ -729,6 +768,43 @@ def build_verification_page(
                 display: inline-block;
                 color: #0b5cff;
                 letter-spacing: 1px;
+            }}
+
+            .merchant-code-label {{
+                display: block;
+                margin-top: 20px;
+                margin-bottom: 8px;
+                color: #10233f;
+                font-size: 16px;
+                font-weight: 800;
+            }}
+
+            .merchant-code-input {{
+                width: 100%;
+                padding: 15px;
+                border: 1px solid #cbd5e1;
+                border-radius: 14px;
+                outline: none;
+                text-align: center;
+                direction: ltr;
+                font-size: 20px;
+                letter-spacing: 3px;
+            }}
+
+            .merchant-code-input:focus {{
+                border-color: #0b5cff;
+                box-shadow: 0 0 0 4px rgba(11, 92, 255, 0.12);
+            }}
+
+            .error-box {{
+                padding: 14px;
+                margin-top: 18px;
+                border: 1px solid #fecaca;
+                border-radius: 14px;
+                color: #991b1b;
+                background: #fef2f2;
+                text-align: center;
+                font-weight: 800;
             }}
 
             .redeem-button {{
@@ -913,8 +989,9 @@ def verify_voucher(
     "/v/{verification_token}/redeem",
     response_class=HTMLResponse,
 )
-def redeem_voucher(
+async def redeem_voucher(
     verification_token: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     voucher = db.scalar(
@@ -964,6 +1041,42 @@ def redeem_voucher(
             status_code=409,
         )
 
+    raw_form = (await request.body()).decode(
+        "utf-8",
+        errors="ignore",
+    )
+    form_data = parse_qs(raw_form)
+    entered_code = (
+        form_data.get("merchant_code", [""])[0].strip()
+    )
+
+    expected_code = str(
+        MERCHANT_CODES.get(voucher.merchant_name)
+        or MERCHANT_CODES.get("*")
+        or ""
+    ).strip()
+
+    if not expected_code:
+        return HTMLResponse(
+            content=build_verification_page(
+                voucher,
+                "لم يتم إعداد رمز لهذا التاجر. تواصل مع إدارة بكجات.",
+            ),
+            status_code=503,
+        )
+
+    if not hmac.compare_digest(
+        entered_code,
+        expected_code,
+    ):
+        return HTMLResponse(
+            content=build_verification_page(
+                voucher,
+                "رمز التاجر غير صحيح. حاول مرة أخرى.",
+            ),
+            status_code=403,
+        )
+
     voucher.status = "redeemed"
     voucher.redeemed_at = datetime.now(timezone.utc)
 
@@ -973,7 +1086,6 @@ def redeem_voucher(
     return HTMLResponse(
         content=build_verification_page(voucher)
     )
-
 
 
 @app.get(
