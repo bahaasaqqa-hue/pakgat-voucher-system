@@ -652,7 +652,7 @@ def admin_integrations(request: Request):
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.payment.updated</code> فقط، وبعد أن تكون حالة الدفع paid/completed/success. أحداث إنشاء الطلب وتحديث حالته لا تُصدر قسائم.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تأكيد الدفع في سلة ← التحقق من التوقيع ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.updated</code> هو الحدث الرئيسي المعتمد من إعدادات التطبيق، مع دعم <code>order.payment.updated</code> إن وصل. لا تُصدر القسيمة إلا عند وجود تأكيد دفع صريح أو عندما يساوي المبلغ المدفوع إجمالي الطلب.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تحديث الطلب من سلة ← التحقق من الدفع الفعلي ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR مرة واحدة ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
@@ -694,7 +694,7 @@ async def salla_webhook(
 
     # Security rule: vouchers are issued only after Salla confirms payment.
     # Other order events are logged for visibility but never create a voucher.
-    supported_events = {"order.payment.updated"}
+    supported_events = {"order.updated", "order.payment.updated"}
 
     if event not in supported_events:
         log_event(
@@ -743,12 +743,46 @@ async def salla_webhook(
         or ""
     ).strip().lower()
 
-    is_paid = payment_status in {
+    paid_statuses = {
         "paid",
         "completed",
         "success",
         "successful",
+        "تم الدفع",
+        "مدفوع",
     }
+
+    def amount_value(*paths: str) -> float:
+        value = first_value(data, *paths)
+        if isinstance(value, dict):
+            value = value.get("amount") or value.get("value")
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    paid_amount = amount_value(
+        "amounts.paid.amount",
+        "amounts.paid",
+        "paid_amount.amount",
+        "paid_amount",
+        "order.amounts.paid.amount",
+        "order.amounts.paid",
+    )
+    total_amount = amount_value(
+        "amounts.total.amount",
+        "amounts.total",
+        "total.amount",
+        "total",
+        "order.amounts.total.amount",
+        "order.amounts.total",
+    )
+
+    # Salla's broad order.updated event may carry either an explicit payment
+    # status or paid/total amounts. We require one of these two strong signals.
+    is_paid = payment_status in paid_statuses or (
+        total_amount > 0 and paid_amount >= total_amount
+    )
 
     if not is_paid:
         log_event(
@@ -756,7 +790,8 @@ async def salla_webhook(
             "salla_webhook_ignored",
             details=(
                 f"Event={event}; order_status={order_status or 'unknown'}; "
-                f"payment_status={payment_status or 'unknown'}"
+                f"payment_status={payment_status or 'unknown'}; "
+                f"paid_amount={paid_amount}; total_amount={total_amount}"
             ),
         )
         return {
@@ -766,6 +801,8 @@ async def salla_webhook(
             "event": event,
             "order_status": order_status,
             "payment_status": payment_status,
+            "paid_amount": paid_amount,
+            "total_amount": total_amount,
         }
 
     base_order_id = str(
