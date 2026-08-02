@@ -143,7 +143,7 @@ try:
 except json.JSONDecodeError:
     MERCHANT_CODES = {}
 
-VOUCHER_PRODUCT_IDS = {v.strip() for v in env("VOUCHER_PRODUCT_IDS", "").split(",") if v.strip()}
+VOUCHER_SKU_PREFIX = env("VOUCHER_SKU_PREFIX", "PKG-QR").upper()
 
 
 BASE_CSS = """
@@ -220,6 +220,22 @@ def item_product_id(item: dict) -> str:
 
 def item_product_name(item: dict) -> str:
     return str(first_value(item, "product.name", "name", "product_name") or "عرض بكجات")
+
+
+def item_sku(item: dict) -> str:
+    """Read the product SKU from the common Salla webhook item shapes."""
+    return str(
+        first_value(
+            item,
+            "sku",
+            "product.sku",
+            "product.sku_code",
+            "variant.sku",
+            "product.variant.sku",
+            "code",
+        )
+        or ""
+    ).strip()
 
 
 def item_option_name(item: dict) -> Optional[str]:
@@ -611,6 +627,10 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "salla_webhook_rejected": "Webhook مرفوض",
         "salla_webhook_ignored": "Webhook متجاهل",
         "salla_order_processed": "معالجة طلب سلة",
+        "salla_webhook_received": "استلام Webhook",
+        "salla_product_matched": "منتج مؤهل للقسيمة",
+        "salla_product_ignored": "منتج غير مؤهل",
+        "voucher_already_exists": "قسيمة موجودة مسبقًا",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
@@ -627,12 +647,12 @@ def admin_integrations(request: Request):
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
     webhook_ready = bool(SALLA_WEBHOOK_SECRET)
-    products_ready = bool(VOUCHER_PRODUCT_IDS)
+    products_ready = bool(VOUCHER_SKU_PREFIX)
     smtp_ready = all(env(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"))
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>{esc(', '.join(sorted(VOUCHER_PRODUCT_IDS)) or 'غير محدد')}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
@@ -807,17 +827,60 @@ async def salla_webhook(
         }
 
     created = []
+    matched_products = 0
+    ignored_products = 0
+
     for item in items:
         product_id = item_product_id(item)
-        if product_id not in VOUCHER_PRODUCT_IDS:
+        product_name = item_product_name(item)
+        sku = item_sku(item)
+        normalized_sku = sku.upper()
+
+        if not normalized_sku.startswith(VOUCHER_SKU_PREFIX):
+            ignored_products += 1
+            log_event(
+                db,
+                "salla_product_ignored",
+                details=(
+                    f"Order {base_order_id}; product_id={product_id or 'unknown'}; "
+                    f"product={product_name}; sku={sku or 'missing'}; "
+                    f"required_prefix={VOUCHER_SKU_PREFIX}"
+                ),
+            )
             continue
 
+        matched_products += 1
+        log_event(
+            db,
+            "salla_product_matched",
+            details=(
+                f"Order {base_order_id}; product_id={product_id or 'unknown'}; "
+                f"product={product_name}; sku={sku}"
+            ),
+        )
+
         for index in range(1, item_quantity(item) + 1):
+            voucher_order_id = f"{base_order_id}:{product_id}:{index}"
+            existing = db.scalar(
+                select(Voucher).where(
+                    Voucher.order_id == voucher_order_id,
+                    Voucher.product_id == product_id,
+                )
+            )
+            if existing:
+                log_event(
+                    db,
+                    "voucher_already_exists",
+                    existing.id,
+                    f"Repeated Salla event for order {base_order_id}; sku={sku}",
+                )
+                continue
+
             voucher = create_voucher_record(
                 db=db,
-                order_id=f"{base_order_id}:{product_id}:{index}",
+                order_id=voucher_order_id,
                 product_id=product_id,
-                product_name=item_product_name(item),
+                product_name=product_name,
                 merchant_name=merchant_name,
                 customer_name=customer_name,
                 customer_phone=customer_phone,
@@ -832,7 +895,7 @@ async def salla_webhook(
                 db,
                 "voucher_created",
                 voucher.id,
-                f"Created from Salla order {base_order_id}",
+                f"Created from Salla order {base_order_id}; sku={sku}",
             )
             if customer_email:
                 background_tasks.add_task(
@@ -848,14 +911,19 @@ async def salla_webhook(
     log_event(
         db,
         "salla_order_processed",
-        details=f"Order {base_order_id}; event={event}; created={len(created)}",
+        details=(
+            f"Order {base_order_id}; event={event}; payment_status={payment_status or 'unknown'}; "
+            f"matched_products={matched_products}; ignored_products={ignored_products}; "
+            f"created={len(created)}"
+        ),
     )
     return {
         "ok": True,
         "event": event,
         "order_id": base_order_id,
         "created_count": len(created),
+        "matched_products": matched_products,
+        "ignored_products": ignored_products,
         "email_queued": bool(created and customer_email),
         "vouchers": created,
     }
-
