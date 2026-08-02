@@ -683,13 +683,16 @@ async def salla_webhook(
             content={"ok": False, "detail": "Invalid JSON."},
         )
 
-    event = str(payload.get("event") or "").strip()
+    event = str(payload.get("event") or "").strip().lower()
     data = payload.get("data") or {}
 
     log_event(
         db,
         "salla_webhook_received",
-        details=f"Event received: {event or 'unknown'}",
+        details=(
+            f"Raw event={payload.get('event')} | "
+            f"Normalized={event or 'unknown'}"
+        ),
     )
 
     # Security rule: vouchers are issued only after Salla confirms payment.
