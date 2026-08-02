@@ -652,7 +652,7 @@ def admin_integrations(request: Request):
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الأحداث المدعومة</h2><p><code>order.payment.updated</code> عند تحول حالة الدفع إلى paid/completed/success.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>طلب مدفوع في سلة ← التحقق من التوقيع ← مطابقة المنتج ← إنشاء القسيمة وQR ← إرسال الرابط بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.payment.updated</code> فقط، وبعد أن تكون حالة الدفع paid/completed/success. أحداث إنشاء الطلب وتحديث حالته لا تُصدر قسائم.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تأكيد الدفع في سلة ← التحقق من التوقيع ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
@@ -692,11 +692,9 @@ async def salla_webhook(
         details=f"Event received: {event or 'unknown'}",
     )
 
-    supported_events = {
-        "order.payment.updated",
-        "order.status.updated",
-        "order.created",
-    }
+    # Security rule: vouchers are issued only after Salla confirms payment.
+    # Other order events are logged for visibility but never create a voucher.
+    supported_events = {"order.payment.updated"}
 
     if event not in supported_events:
         log_event(
@@ -715,10 +713,19 @@ async def salla_webhook(
         first_value(
             data,
             "payment.status.slug",
+            "payment.status.name",
             "payment.status",
+            "payment_status.slug",
+            "payment_status.name",
             "payment_status",
             "order.payment.status.slug",
+            "order.payment.status.name",
             "order.payment.status",
+            # In an order.payment.updated event, some payload versions expose
+            # the payment state directly under data.status.
+            "status.slug",
+            "status.name",
+            "status",
         )
         or ""
     ).strip().lower()
@@ -755,7 +762,7 @@ async def salla_webhook(
         return {
             "ok": True,
             "ignored": True,
-            "reason": "Order is not paid or completed.",
+            "reason": "Payment has not been confirmed as successful.",
             "event": event,
             "order_status": order_status,
             "payment_status": payment_status,
