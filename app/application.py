@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import HTTPError, URLError
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -144,6 +146,8 @@ except json.JSONDecodeError:
     MERCHANT_CODES = {}
 
 VOUCHER_SKU_PREFIX = env("VOUCHER_SKU_PREFIX", "PKG-QR").upper()
+WHATSLOOP_API_BASE_URL = env("WHATSLOOP_API_BASE_URL").rstrip("/")
+WHATSLOOP_API_TOKEN = env("WHATSLOOP_API_TOKEN")
 
 
 BASE_CSS = """
@@ -288,6 +292,102 @@ def send_voucher_email(customer_email: str, customer_name: str, product_name: st
     else:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
             smtp.starttls(); smtp.login(smtp_user, smtp_password); smtp.send_message(message)
+
+
+
+def normalize_saudi_phone(phone: str) -> str:
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if digits.startswith("00966"):
+        digits = digits[2:]
+    elif digits.startswith("05") and len(digits) == 10:
+        digits = "966" + digits[1:]
+    elif digits.startswith("5") and len(digits) == 9:
+        digits = "966" + digits
+    return digits
+
+
+def send_voucher_whatsapp(
+    voucher_id: int,
+    customer_phone: str,
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    verification_url: str,
+) -> None:
+    phone = normalize_saudi_phone(customer_phone)
+
+    if not phone:
+        with SessionLocal() as db:
+            log_event(db, "whatsapp_skipped", voucher_id, "Customer phone is missing.")
+        return
+
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        with SessionLocal() as db:
+            log_event(db, "whatsapp_skipped", voucher_id, "WhatsLoop environment variables are missing.")
+        return
+
+    name = (customer_name or "عميل بكجات").strip()
+    message = (
+        f"🎉 مرحباً {name}\n\n"
+        "شكراً لاختيارك Pakgat.\n\n"
+        "تم إصدار قسيمتك بنجاح.\n\n"
+        f"🎟️ العرض: {product_name}\n"
+        f"🔖 رقم القسيمة: {voucher_code}\n"
+        f"📦 رقم الطلب: {order_id}\n\n"
+        "اضغط هنا لعرض القسيمة ورمز QR:\n"
+        f"{verification_url}\n\n"
+        "لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
+        "ولا تعرضه للتاجر إلا عند استلام الخدمة.\n\n"
+        "نتمنى لك تجربة ممتعة 🌹"
+    )
+
+    body = json.dumps(
+        {"to": phone, "message": message},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "whatsapp_sent",
+                voucher_id,
+                f"phone={phone}; http_status={status_code}; response={response_text[:260]}",
+            )
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "whatsapp_failed",
+                voucher_id,
+                f"phone={phone}; http_status={exc.code}; response={error_text[:260]}",
+            )
+    except (URLError, TimeoutError, OSError) as exc:
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "whatsapp_failed",
+                voucher_id,
+                f"phone={phone}; error={type(exc).__name__}: {exc}",
+            )
+
 
 
 def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
@@ -631,6 +731,9 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "salla_product_matched": "منتج مؤهل للقسيمة",
         "salla_product_ignored": "منتج غير مؤهل",
         "voucher_already_exists": "قسيمة موجودة مسبقًا",
+        "whatsapp_sent": "إرسال القسيمة عبر واتساب",
+        "whatsapp_failed": "فشل إرسال واتساب",
+        "whatsapp_skipped": "تجاوز إرسال واتساب",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
@@ -974,6 +1077,24 @@ async def salla_webhook(
                     verification_url,
                     voucher.expires_at,
                 )
+            if customer_phone:
+                background_tasks.add_task(
+                    send_voucher_whatsapp,
+                    voucher.id,
+                    customer_phone,
+                    customer_name,
+                    voucher.product_name,
+                    voucher.code,
+                    base_order_id,
+                    verification_url,
+                )
+            else:
+                log_event(
+                    db,
+                    "whatsapp_skipped",
+                    voucher.id,
+                    f"WhatsApp skipped for order {base_order_id}: customer phone is missing.",
+                )
 
     log_event(
         db,
@@ -992,5 +1113,6 @@ async def salla_webhook(
         "matched_products": matched_products,
         "ignored_products": ignored_products,
         "email_queued": bool(created and customer_email),
+        "whatsapp_queued": bool(created and customer_phone),
         "vouchers": created,
     }
