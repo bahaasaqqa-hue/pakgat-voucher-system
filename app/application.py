@@ -1,4 +1,3 @@
-# PAKGAT_WHATSAPP_COPY_VERSION: 2026-08-08-vip-both-messages
 import os
 import json
 import secrets
@@ -330,24 +329,17 @@ def send_voucher_whatsapp(
 
     name = (customer_name or "عميل بكجات").strip()
     message = (
-        "✅ قسيمتك جاهزة للاستخدام\n\n"
-        f"مرحباً {name} 🎁\n\n"
+        f"🎉 مرحباً {name}\n\n"
+        "شكراً لاختيارك Pakgat.\n\n"
         "تم إصدار قسيمتك بنجاح.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {order_id}\n\n"
-        "افتح قسيمتك ورمز QR:\n"
+        "اضغط هنا لعرض القسيمة ورمز QR:\n"
         f"{verification_url}\n\n"
-        "📲 عند استلام الخدمة، اعرض رمز QR للتاجر ليتم تأكيد الاستخدام.\n\n"
-        "🔒 لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
-        "ولا تعرضه إلا عند استلام الخدمة.\n\n"
-        "⭐ وعندنا لك شيء إضافي!\n\n"
-        "بما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا 💙\n\n"
-        "🎁 استخدم الكود VIP واحصل على خصم 5% على طلبك القادم.\n\n"
-        "يمكن عرضك القادم موجود من الآن 👀\n"
-        "https://pakgat.com\n\n"
-        "شكراً لاختيارك Pakgat\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+        "لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
+        "ولا تعرضه للتاجر إلا عند استلام الخدمة.\n\n"
+        "نتمنى لك تجربة ممتعة 🌹"
     )
 
     body = json.dumps(
@@ -435,20 +427,16 @@ def send_redemption_whatsapp(
     display_order_id = str(order_id or "").split(":", 1)[0]
     used_at = fmt_dt(redeemed_at)
     message = (
-        "✅ تم استبدال قسيمتك بنجاح\n\n"
-        f"مرحباً {name} 🎁\n\n"
-        f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
+        "✅ تم استخدام قسيمتك بنجاح\n\n"
+        f"مرحباً {name} 🌹\n\n"
+        "تم تأكيد استخدام قسيمتك واستلام الخدمة بنجاح.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {display_order_id}\n"
+        f"🏪 التاجر: {merchant_name}\n"
         f"🕒 وقت الاستخدام: {used_at}\n\n"
-        "⭐ وبما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا.\n\n"
-        "🎁 استمتع بخصم 5% على طلبك القادم باستخدام الكود: VIP\n\n"
-        "اكتشف عرضك القادم:\n"
-        "https://pakgat.com\n\n"
-        "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
-        "شكراً لاختيارك Pakgat\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+        "شكراً لاختيارك Pakgat 💙\n"
+        "بدون قروشة.. بكجات تضبطك"
     )
 
     body = json.dumps(
