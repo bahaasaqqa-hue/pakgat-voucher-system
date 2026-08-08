@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-TEST-v3
+# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-CF-FIX-v4
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-SALLA-METADATA-TEST-v3"
+BUILD_VERSION = "2026-08-08-SALLA-METADATA-CF-FIX-v4"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -564,6 +564,8 @@ def refresh_salla_credential(merchant_id: str) -> tuple[Optional[str], Optional[
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "X-Pakgat-App": "530632947",
             },
             method="POST",
         )
@@ -630,6 +632,8 @@ def fetch_salla_product_metadata(
             headers={
                 "Authorization": f"Bearer {active_token}",
                 "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "X-Pakgat-App": "530632947",
             },
             method="GET",
         )
