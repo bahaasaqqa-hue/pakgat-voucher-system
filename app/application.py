@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-DIAGNOSTIC-v5
+# PAKGAT_BUILD: 2026-08-08-SALLA-PRODUCT-DIAGNOSTIC-v6
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-SALLA-METADATA-DIAGNOSTIC-v5"
+BUILD_VERSION = "2026-08-08-SALLA-PRODUCT-DIAGNOSTIC-v6"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -1551,33 +1551,41 @@ def admin_integrations(request: Request):
 
 
 @app.get("/admin/merchant-test", response_class=HTMLResponse)
-def admin_merchant_metadata_test(request: Request, product_id: str = "", db: Session = Depends(get_db)):
+def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: str = "", db: Session = Depends(get_db)):
     try:
         require_admin(request)
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
 
     product_id = (product_id or "").strip()
+    sku = (sku or "").strip()
     result_box = ""
-    if product_id:
-        values_payload, values_error = fetch_salla_json_endpoint(
-            db, f"/metadata/values/product/{quote(str(product_id), safe='')}"
-        )
-        definitions_payload, definitions_error = fetch_salla_json_endpoint(
-            db, "/metadata?entity=product"
-        )
-        product_payload, product_error = fetch_salla_json_endpoint(
-            db, f"/products/{quote(str(product_id), safe='')}"
-        )
+    if product_id or sku:
+        by_id_payload = by_id_error = None
+        by_sku_payload = by_sku_error = None
+        values_payload = values_error = None
 
-        # Search all three safe product-side responses for the configured labels.
+        if product_id:
+            by_id_payload, by_id_error = fetch_salla_json_endpoint(
+                db, f"/products/{quote(product_id, safe='')}"
+            )
+            values_payload, values_error = fetch_salla_json_endpoint(
+                db, f"/metadata/values/product/{quote(product_id, safe='')}"
+            )
+
+        if sku:
+            by_sku_payload, by_sku_error = fetch_salla_json_endpoint(
+                db, f"/products/sku/{quote(sku, safe='')}"
+            )
+
+        # Search only read-only product-side responses for the configured labels.
         raw_phone = None
         partner_name = None
         source = None
         for label, payload in (
+            ("product_by_id", by_id_payload),
+            ("product_by_sku", by_sku_payload),
             ("metadata_values", values_payload),
-            ("metadata_definitions", definitions_payload),
-            ("product_details", product_payload),
         ):
             if payload is None:
                 continue
@@ -1589,71 +1597,79 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", db: Ses
                 partner_name = find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
 
         phones = merchant_phone_candidates(raw_phone)
-        definitions = metadata_definition_summary(definitions_payload or {})
-        defs_html = ""
-        if definitions:
-            rows = []
-            for group in definitions:
-                fields = ", ".join(f"{f['name']} ({f['type']})" for f in group['fields']) or "—"
-                rows.append(
-                    f"<tr><td>{esc(group['name'] or '—')}</td><td>{'نعم' if group['visible'] else 'لا'}</td><td>{esc(group['owner'] or '—')}</td><td>{esc(fields)}</td></tr>"
-                )
-            defs_html = (
-                "<div class='card' style='padding:20px;margin-top:14px'><h3>تعريفات الحقول المخصصة التي أعادتها سلة</h3>"
-                "<div class='table-wrap'><table><tr><th>القسم</th><th>ظاهر</th><th>المالك</th><th>الحقول</th></tr>"
-                + "".join(rows) + "</table></div></div>"
-            )
-        else:
-            defs_html = "<div class='alert alert-error' style='margin-top:14px'><strong>سلة لم تُرجع أي تعريفات حقول مخصصة للمنتجات لهذا التطبيق.</strong></div>"
 
-        error_parts = []
+        # Prefer product data returned by SKU, because it validates the installed store
+        # independently from the manually copied admin product ID.
+        product_payload = by_sku_payload or by_id_payload
+        product_data = product_payload.get("data") if isinstance(product_payload, dict) else product_payload
+        if not isinstance(product_data, dict):
+            product_data = {}
+
+        api_id = str(product_data.get("id") or "")
+        api_name = str(product_data.get("name") or "")
+        api_sku = str(product_data.get("sku") or "")
+        product_paths = diagnostic_key_paths(product_payload or {})
+        values_paths = diagnostic_key_paths(values_payload or {})
+        interesting_paths = [
+            p for p in product_paths
+            if any(word in p.lower() for word in ("metadata", "custom", "field", "section", "detail", "attribute"))
+        ]
+
+        errors = []
+        if by_id_error:
+            errors.append(f"product by id: {by_id_error}")
+        if by_sku_error:
+            errors.append(f"product by sku: {by_sku_error}")
         if values_error:
-            error_parts.append(f"metadata values: {values_error}")
-        if definitions_error:
-            error_parts.append(f"metadata definitions: {definitions_error}")
-        if product_error:
-            error_parts.append(f"product details: {product_error}")
+            errors.append(f"metadata values: {values_error}")
         errors_html = ""
-        if error_parts:
-            errors_html = "<div class='alert alert-error' style='margin-top:14px' dir='ltr'>" + esc(" | ".join(error_parts)) + "</div>"
+        if errors:
+            errors_html = "<div class='alert alert-error' style='margin-top:14px' dir='ltr'>" + esc(" | ".join(errors)) + "</div>"
+
+        identity_html = (
+            "<div class='card' style='padding:20px;margin-top:14px'><h3>هوية المنتج التي أعادتها Salla API</h3>"
+            f"<p><strong>Product ID من API:</strong> <span dir='ltr'>{esc(api_id or 'غير موجود')}</span></p>"
+            f"<p><strong>SKU من API:</strong> <span dir='ltr'>{esc(api_sku or 'غير موجود')}</span></p>"
+            f"<p><strong>اسم المنتج:</strong> {esc(api_name or 'غير موجود')}</p>"
+            "</div>"
+        )
 
         if phones:
             phone_rows = "".join(f"<li dir='ltr'><strong>{esc(p)}</strong></li>" for p in phones)
             result_box = (
                 "<div class='alert alert-ok'><strong>تم العثور على رقم جوال استقبال القسائم ✅</strong></div>"
-                "<div class='card' style='padding:20px;margin-top:14px'>"
-                f"<p><strong>رقم المنتج:</strong> <span dir='ltr'>{esc(product_id)}</span></p>"
+                + identity_html
+                + "<div class='card' style='padding:20px;margin-top:14px'>"
                 f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
                 f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
                 f"<ul>{phone_rows}</ul>"
                 "<p class='muted'>اختبار قراءة فقط؛ لم يتم إرسال واتساب ولم يتم إنشاء قسيمة.</p>"
-                "</div>" + defs_html + errors_html
+                "</div>" + errors_html
             )
-            log_event(db, "merchant_metadata_test_ok", details=f"product_id={product_id}; source={source}; phones={','.join(masked_phone(p) for p in phones)}")
+            log_event(db, "merchant_product_test_ok", details=f"product_id={product_id}; sku={sku}; source={source}; phones={','.join(masked_phone(p) for p in phones)}")
         else:
-            value_paths = diagnostic_key_paths(values_payload or {})
-            product_paths = diagnostic_key_paths(product_payload or {})
             result_box = (
-                "<div class='alert alert-error'><strong>الوصول إلى Salla API ناجح، لكن رقم الجوال لم يُقرأ بعد.</strong>"
-                "<div style='margin-top:8px'>الخطوة التشخيصية الآن هي مقارنة تعريفات الحقول مع استجابة قيم المنتج.</div></div>"
-                + defs_html
-                + "<div class='card' style='padding:20px;margin-top:14px'><h3>شكل الاستجابات (أسماء المفاتيح فقط)</h3>"
-                f"<p><strong>Metadata values:</strong> <code>{esc(', '.join(value_paths[:40]) if value_paths else 'لا يوجد')}</code></p>"
-                f"<p><strong>Product details:</strong> <code>{esc(', '.join(product_paths[:40]) if product_paths else 'لا يوجد')}</code></p>"
-                "<p class='muted'>لا يتم عرض Access Token أو Refresh Token أو بيانات العملاء في هذا التشخيص.</p></div>"
+                "<div class='alert alert-error'><strong>تم فحص المنتج من Merchant API، لكن رقم جوال استقبال القسائم لم يظهر في استجابة المنتج.</strong>"
+                "<div style='margin-top:8px'>هذا الاختبار يحدد هل الحقول المخصصة في لوحة سلة تظهر داخل Product API الحالي أم لا.</div></div>"
+                + identity_html
+                + "<div class='card' style='padding:20px;margin-top:14px'><h3>شكل استجابة المنتج (أسماء المفاتيح فقط)</h3>"
+                f"<p><strong>مسارات مرتبطة بالحقول:</strong> <code>{esc(', '.join(interesting_paths[:40]) if interesting_paths else 'لا يوجد')}</code></p>"
+                f"<p><strong>Metadata values:</strong> <code>{esc(', '.join(values_paths[:40]) if values_paths else 'لا يوجد')}</code></p>"
+                "<p class='muted'>لا يتم عرض Access Token أو Refresh Token أو بيانات العملاء.</p></div>"
                 + errors_html
             )
-            def_names = [g.get('name','') for g in definitions]
-            log_event(db, "merchant_metadata_diagnostic", details=f"product_id={product_id}; groups={len(definitions)}; group_names={','.join(def_names)[:300]}; values_paths={','.join(value_paths[:20]) if value_paths else 'none'}")
+            log_event(db, "merchant_product_diagnostic", details=f"product_id={product_id}; sku={sku}; api_id={api_id}; api_sku={api_sku}; interesting_paths={','.join(interesting_paths[:20]) if interesting_paths else 'none'}")
 
     body = f"""<main class='wrap' style='padding:28px 0 48px'>
     <section class='card' style='max-width:920px;margin:auto;padding:24px'>
-      <h1>تشخيص رقم جوال الشريك من سلة</h1>
-      <p class='muted'>بدون شراء، بدون إنشاء قسيمة، وبدون إرسال واتساب. يفحص تعريفات الحقول وقيم المنتج وتفاصيل المنتج.</p>
+      <h1>تشخيص رقم جوال الشريك من بيانات المنتج</h1>
+      <p class='muted'>بدون شراء، بدون إنشاء قسيمة، وبدون إرسال واتساب. يستخدم Product Details الرسمي من Salla ويقارن القراءة بالـSKU والـProduct ID.</p>
       <form method='get' action='/admin/merchant-test'>
         <label>رقم المنتج في سلة (Product ID)</label>
-        <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='1181243277' required>
-        <button class='btn btn-blue' style='margin-top:14px' type='submit'>تشخيص القراءة</button>
+        <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='1181243277'>
+        <label style='display:block;margin-top:12px'>SKU</label>
+        <input class='input' name='sku' dir='ltr' value='{esc(sku or 'PKG-QR-00012')}' placeholder='PKG-QR-00012'>
+        <button class='btn btn-blue' style='margin-top:14px' type='submit'>تشخيص المنتج</button>
       </form>
       <div style='margin-top:20px'>{result_box}</div>
     </section></main>"""
