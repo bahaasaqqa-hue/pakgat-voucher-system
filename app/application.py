@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-MERCHANT-NAME-WHATSAPP-v7
+# PAKGAT_BUILD: 2026-08-08-MERCHANT-REDEMPTION-v8.1-VERIFIED
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-MERCHANT-NAME-WHATSAPP-v7"
+BUILD_VERSION = "2026-08-08-MERCHANT-REDEMPTION-v8.1-VERIFIED"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -89,6 +89,27 @@ class MerchantNotification(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[str] = mapped_column(String(100), index=True)
     product_id: Mapped[str] = mapped_column(String(100), index=True)
+    merchant_phone: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
+class MerchantRedemptionNotification(Base):
+    __tablename__ = "merchant_redemption_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "voucher_id",
+            "merchant_phone",
+            name="uq_merchant_redemption_notification",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    voucher_id: Mapped[int] = mapped_column(Integer, index=True)
     merchant_phone: Mapped[str] = mapped_column(String(30), index=True)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -214,7 +235,7 @@ PARTNER_NAME_FIELD_LABELS = {
 }
 MERCHANT_NOTIFICATION_PIN = (
     env("MERCHANT_NOTIFICATION_PIN")
-    or str(MERCHANT_CODES.get("Pakgat") or MERCHANT_CODES.get("*") or "4826")
+    or str(MERCHANT_CODES.get("Pakgat") or MERCHANT_CODES.get("*") or "")
 ).strip()
 
 
@@ -1070,19 +1091,29 @@ def send_merchant_sale_whatsapp(
             log_event(db, failed_action, details=f"order={order_id}; WhatsLoop config missing")
         return
 
+    if not MERCHANT_NOTIFICATION_PIN:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = "Merchant PIN is not configured."
+                db.commit()
+            log_event(db, failed_action, details=f"order={order_id}; merchant PIN config missing")
+        return
+
     test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد طلب حقيقي\n\n" if test_mode else ""
     message = (
         test_prefix
-        + f"🎉 تم بيع **{product_name}** عبر Pakgat\n\n"
+        + f"🎉 تم بيع *{product_name}* عبر Pakgat\n\n"
         f"مرحباً {partner}\n\n"
-        f"تم شراء **{product_name}** بنجاح عبر **Pakgat**.\n\n"
+        f"تم شراء *{product_name}* بنجاح عبر *Pakgat*.\n\n"
         f"📦 رقم الطلب: {order_id}\n"
         f"🔢 الكمية: {quantity}\n"
         f"🎫 عدد القسائم: {voucher_count}\n\n"
-        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR **قبل استلام الخدمة**.\n\n"
-        f"🔐 **الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}**\n\n"
+        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR *قبل استلام الخدمة*.\n\n"
+        f"🔐 *الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}*\n\n"
         "يتم تأكيد استلام الخدمة عند حضور العميل وعرض رمز QR الخاص بالقسيمة.\n\n"
-        "شكراً لشراكتكم مع **Pakgat** 💙"
+        "شكراً لشراكتكم مع *Pakgat* 💙"
     )
 
     body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
@@ -1141,6 +1172,240 @@ def send_merchant_sale_whatsapp(
                 failed_action,
                 details=f"order={order_id}; phone={masked_phone(phone)}; error={type(exc).__name__}",
             )
+
+
+def reserve_merchant_redemption_notification(
+    db: Session,
+    voucher_id: int,
+    merchant_phone: str,
+) -> Optional[int]:
+    existing = db.scalar(
+        select(MerchantRedemptionNotification).where(
+            MerchantRedemptionNotification.voucher_id == voucher_id,
+            MerchantRedemptionNotification.merchant_phone == merchant_phone,
+        )
+    )
+    if existing:
+        if existing.status == "failed":
+            existing.status = "queued"
+            existing.last_error = None
+            db.commit()
+            return existing.id
+        return None
+
+    notification = MerchantRedemptionNotification(
+        voucher_id=voucher_id,
+        merchant_phone=merchant_phone,
+        status="queued",
+    )
+    db.add(notification)
+    try:
+        db.commit()
+        db.refresh(notification)
+        return notification.id
+    except IntegrityError:
+        db.rollback()
+        return None
+
+
+def merchant_redemption_context(db: Session, voucher: Voucher) -> tuple[list[str], str, str]:
+    """Resolve merchant phones/name after a successful redemption.
+
+    Prefer the already-known phone(s) from the sale notification rows. Then use
+    Salla product metadata as a fallback and to resolve the partner display name.
+    """
+    base_order_id = str(voucher.order_id or "").split(":", 1)[0]
+    phones: list[str] = []
+
+    sale_rows = db.scalars(
+        select(MerchantNotification).where(
+            MerchantNotification.order_id == base_order_id,
+            MerchantNotification.product_id == str(voucher.product_id or ""),
+        )
+    ).all()
+    for row in sale_rows:
+        phone = normalize_saudi_phone(row.merchant_phone)
+        if phone and phone not in phones:
+            phones.append(phone)
+
+    partner_name = ""
+    metadata_payload = None
+    metadata_error = None
+    product_id = str(voucher.product_id or "").strip()
+    if product_id:
+        metadata_payload, metadata_error = fetch_salla_json_endpoint(
+            db, f"/metadata/values/product/{quote(product_id, safe='')}"
+        )
+        if metadata_payload is not None:
+            partner_name = (
+                find_labeled_metadata_value(metadata_payload, PARTNER_NAME_FIELD_LABELS)
+                or ""
+            ).strip()
+            if not phones:
+                metadata_phone = find_labeled_metadata_value(
+                    metadata_payload, MERCHANT_PHONE_FIELD_LABELS
+                )
+                for phone in merchant_phone_candidates(metadata_phone):
+                    if phone not in phones:
+                        phones.append(phone)
+
+    if not phones:
+        log_event(
+            db,
+            "merchant_redemption_phone_not_found",
+            voucher.id,
+            (
+                f"order={base_order_id}; product_id={product_id or 'unknown'}; "
+                f"metadata={metadata_error or 'no_phone'}"
+            ),
+        )
+
+    return phones[:2], partner_name or "شريك Pakgat", base_order_id
+
+
+def send_merchant_redemption_whatsapp(
+    notification_id: Optional[int],
+    voucher_id: Optional[int],
+    merchant_phone: str,
+    merchant_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    redeemed_at: datetime,
+    test_mode: bool = False,
+) -> bool:
+    phone = normalize_saudi_phone(merchant_phone)
+    partner = (merchant_name or "شريك Pakgat").strip()
+    sent_action = (
+        "merchant_redemption_whatsapp_test_sent"
+        if test_mode
+        else "merchant_redemption_whatsapp_sent"
+    )
+    failed_action = (
+        "merchant_redemption_whatsapp_test_failed"
+        if test_mode
+        else "merchant_redemption_whatsapp_failed"
+    )
+
+    def mark_failed(error: str) -> None:
+        with SessionLocal() as log_db:
+            if notification_id:
+                row = log_db.get(MerchantRedemptionNotification, notification_id)
+                if row:
+                    row.status = "failed"
+                    row.last_error = error[:500]
+                    log_db.commit()
+            log_event(
+                log_db,
+                failed_action,
+                voucher_id,
+                f"order={order_id}; phone={masked_phone(phone)}; {error[:280]}",
+            )
+
+    if not phone:
+        mark_failed("invalid merchant phone")
+        return False
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        mark_failed("WhatsLoop environment variables are missing")
+        return False
+
+    used_at = fmt_dt(redeemed_at)
+    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد استبدال حقيقي\n\n" if test_mode else ""
+    message = (
+        test_prefix
+        + "✅ تم تأكيد استبدال القسيمة\n\n"
+        f"مرحباً {partner}\n\n"
+        "تم تأكيد استلام الخدمة بنجاح عبر *Pakgat*.\n\n"
+        f"🎟️ العرض: {product_name}\n"
+        f"🔖 رقم القسيمة: {voucher_code}\n"
+        f"📦 رقم الطلب: {order_id}\n"
+        f"🕒 وقت الاستبدال: {used_at}\n\n"
+        "أصبحت القسيمة الآن *مستخدمة* ولا يمكن استخدامها مرة أخرى.\n\n"
+        "شكراً لشراكتكم مع *Pakgat* 💙\n"
+        "بدون قروشة.. بكجات تضبطك ✨"
+    )
+
+    body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+        with SessionLocal() as log_db:
+            if notification_id:
+                row = log_db.get(MerchantRedemptionNotification, notification_id)
+                if row:
+                    row.status = "sent"
+                    row.sent_at = now_utc()
+                    row.last_error = None
+                    log_db.commit()
+            log_event(
+                log_db,
+                sent_action,
+                voucher_id,
+                (
+                    f"order={order_id}; phone={masked_phone(phone)}; "
+                    f"http_status={status_code}; response={response_text[:180]}"
+                ),
+            )
+        return True
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        mark_failed(f"http_status={exc.code}; response={error_text[:220]}")
+    except (URLError, TimeoutError, OSError) as exc:
+        mark_failed(f"error={type(exc).__name__}: {exc}")
+    return False
+
+
+def notify_merchant_after_redemption(voucher_id: int) -> None:
+    """Send one merchant confirmation per voucher/merchant phone after redemption."""
+    with SessionLocal() as db:
+        voucher = db.get(Voucher, voucher_id)
+        if not voucher or voucher.status != "redeemed":
+            return
+        phones, partner_name, base_order_id = merchant_redemption_context(db, voucher)
+        if not phones:
+            return
+        redeemed_at = voucher.redeemed_at or now_utc()
+        product_name = voucher.product_name
+        voucher_code = voucher.code
+
+        jobs: list[tuple[int, str]] = []
+        for phone in phones:
+            notification_id = reserve_merchant_redemption_notification(db, voucher.id, phone)
+            if notification_id:
+                jobs.append((notification_id, phone))
+            else:
+                log_event(
+                    db,
+                    "merchant_redemption_duplicate_skipped",
+                    voucher.id,
+                    f"order={base_order_id}; phone={masked_phone(phone)}",
+                )
+
+    # Network calls run after the DB session is closed.
+    for notification_id, phone in jobs:
+        send_merchant_redemption_whatsapp(
+            notification_id,
+            voucher_id,
+            phone,
+            partner_name,
+            product_name,
+            voucher_code,
+            base_order_id,
+            redeemed_at,
+            test_mode=False,
+        )
 
 
 def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
@@ -1272,6 +1537,7 @@ def health():
         "database": "connected",
         "build": BUILD_VERSION,
         "salla_oauth": "connected" if oauth_ready else "waiting_authorization",
+        "merchant_pin": "configured" if MERCHANT_NOTIFICATION_PIN else "missing",
     }
 
 
@@ -1321,7 +1587,12 @@ async def redeem_voucher(verification_token: str, request: Request, background_t
         return HTMLResponse(build_verification_page(voucher), status_code=409)
     form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
     entered = form.get("merchant_code", [""])[0].strip()
-    expected = str(MERCHANT_CODES.get(voucher.merchant_name) or MERCHANT_CODES.get("*") or "").strip()
+    expected = str(
+        MERCHANT_CODES.get(voucher.merchant_name)
+        or MERCHANT_CODES.get("*")
+        or MERCHANT_NOTIFICATION_PIN
+        or ""
+    ).strip()
     if not expected:
         return HTMLResponse(build_verification_page(voucher, "لم يتم إعداد رمز لهذا التاجر. تواصل مع إدارة بكجات."), status_code=503)
     if not hmac.compare_digest(entered, expected):
@@ -1345,6 +1616,7 @@ async def redeem_voucher(verification_token: str, request: Request, background_t
         voucher.merchant_name,
         voucher.redeemed_at or now_utc(),
     )
+    background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return HTMLResponse(build_verification_page(voucher))
 
 
@@ -1489,6 +1761,7 @@ def admin_redeem_voucher(voucher_id: int, request: Request, background_tasks: Ba
         voucher.merchant_name,
         voucher.redeemed_at or now_utc(),
     )
+    background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return RedirectResponse(f"/admin/vouchers/{voucher_id}", status_code=303)
 
 
@@ -1530,6 +1803,12 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "merchant_whatsapp_test_sent": "اختبار إرسال واتساب للشريك",
         "merchant_whatsapp_test_failed": "فشل اختبار واتساب للشريك",
         "merchant_whatsapp_duplicate_skipped": "تجاوز إشعار شريك مكرر",
+        "merchant_redemption_whatsapp_sent": "إرسال تأكيد الاستبدال للشريك",
+        "merchant_redemption_whatsapp_failed": "فشل تأكيد الاستبدال للشريك",
+        "merchant_redemption_whatsapp_test_sent": "اختبار تأكيد الاستبدال للشريك",
+        "merchant_redemption_whatsapp_test_failed": "فشل اختبار تأكيد الاستبدال للشريك",
+        "merchant_redemption_duplicate_skipped": "تجاوز تأكيد استبدال مكرر",
+        "merchant_redemption_phone_not_found": "تعذر تحديد جوال الشريك بعد الاستبدال",
         "salla_oauth_authorized": "حفظ تفويض سلة",
         "salla_oauth_failed": "فشل حفظ تفويض سلة",
     }
@@ -1654,7 +1933,12 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 "<form method='post' action='/admin/merchant-notification-test' style='margin-top:14px'>"
                 f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
                 f"<input type='hidden' name='sku' value='{esc(sku)}'>"
-                "<button class='btn btn-primary' type='submit' onclick='return confirm(&quot;سيتم إرسال رسالة واتساب اختبارية إلى رقم الشريك المقروء من سلة. لا يوجد شراء أو قسيمة. متابعة؟&quot;);'>إرسال رسالة اختبار للشريك عبر واتساب</button>"
+                "<button class='btn btn-primary' type='submit' onclick='return confirm(&quot;سيتم إرسال رسالة واتساب اختبارية إلى رقم الشريك المقروء من سلة. لا يوجد شراء أو قسيمة. متابعة؟&quot;);'>إرسال اختبار إشعار البيع</button>"
+                "</form>"
+                "<form method='post' action='/admin/merchant-redemption-notification-test' style='margin-top:10px'>"
+                f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
+                f"<input type='hidden' name='sku' value='{esc(sku)}'>"
+                "<button class='btn btn-muted' type='submit' onclick='return confirm(&quot;سيتم إرسال رسالة اختبار لتأكيد استبدال القسيمة إلى الشريك. لا يوجد استبدال حقيقي. متابعة؟&quot;);'>إرسال اختبار تأكيد الاستبدال</button>"
                 "</form>"
                 "</div>" + errors_html
             )
@@ -1775,6 +2059,87 @@ async def admin_merchant_notification_test(request: Request, db: Session = Depen
     )
     body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:860px;margin:auto;padding:24px'><h1>اختبار إشعار الشريك عبر واتساب</h1>{alert}<p><strong>المنتج:</strong> {esc(product_name)}</p><p><strong>اسم الشريك المستخدم:</strong> {esc(partner_name)}</p><div class='table-wrap'><table><thead><tr><th>رقم الشريك</th><th>الحالة</th><th>التفاصيل</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted' style='margin-top:14px'>رسالة الاختبار تبدأ بعبارة واضحة بأنها اختبار ولا يوجد طلب حقيقي. الإرسال الحقيقي يبقى بالنص المعتمد بدون عبارة الاختبار.</p><a class='btn btn-muted' style='margin-top:12px' href='/admin/merchant-test?product_id={esc(product_id)}&sku={esc(sku)}'>العودة لبيانات المنتج</a></section></main>"""
     return HTMLResponse(page_shell("اختبار واتساب الشريك", body, admin=True), status_code=200 if all_ok else 502)
+
+
+@app.post("/admin/merchant-redemption-notification-test", response_class=HTMLResponse)
+async def admin_merchant_redemption_notification_test(request: Request, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    form = parse_qs(raw)
+    product_id = (form.get("product_id", [""])[0] or "").strip()
+    sku = (form.get("sku", [""])[0] or "").strip()
+
+    if not product_id:
+        body = "<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>رقم المنتج غير موجود.</strong></div><a class='btn btn-muted' href='/admin/merchant-test'>العودة للتشخيص</a></section></main>"
+        return HTMLResponse(page_shell("اختبار تأكيد الاستبدال", body, admin=True), status_code=400)
+
+    product_payload, product_error = fetch_salla_json_endpoint(
+        db, f"/products/{quote(product_id, safe='')}"
+    )
+    if (not product_payload or product_error) and sku:
+        product_payload, product_error = fetch_salla_json_endpoint(
+            db, f"/products/sku/{quote(sku, safe='')}"
+        )
+    metadata_payload, metadata_error = fetch_salla_json_endpoint(
+        db, f"/metadata/values/product/{quote(product_id, safe='')}"
+    )
+
+    raw_phone = None
+    partner_name = None
+    for payload in (metadata_payload, product_payload):
+        if payload is None:
+            continue
+        if not raw_phone:
+            raw_phone = find_labeled_metadata_value(payload, MERCHANT_PHONE_FIELD_LABELS)
+        if not partner_name:
+            partner_name = find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
+
+    phones = merchant_phone_candidates(raw_phone)
+    product_data = product_payload.get("data") if isinstance(product_payload, dict) else product_payload
+    if not isinstance(product_data, dict):
+        product_data = {}
+    product_name = str(product_data.get("name") or "عرض Pakgat").strip()
+    partner_name = partner_name or "شريك Pakgat"
+
+    if not phones:
+        error_detail = metadata_error or product_error or "لم يتم العثور على رقم جوال الشريك."
+        log_event(db, "merchant_redemption_whatsapp_test_failed", details=f"product_id={product_id}; reason=phone_not_found")
+        body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>لم يتم إرسال رسالة الاختبار.</strong></div><p class='muted' dir='ltr'>{esc(error_detail)}</p><a class='btn btn-muted' href='/admin/merchant-test?product_id={esc(product_id)}&sku={esc(sku)}'>العودة للتشخيص</a></section></main>"""
+        return HTMLResponse(page_shell("اختبار تأكيد الاستبدال", body, admin=True), status_code=422)
+
+    test_order_id = f"TEST-{int(now_utc().timestamp())}"
+    test_voucher_code = "PKG-TEST-QR"
+    results = []
+    for phone in phones:
+        ok = send_merchant_redemption_whatsapp(
+            None,
+            None,
+            phone,
+            partner_name,
+            product_name,
+            test_voucher_code,
+            test_order_id,
+            now_utc(),
+            test_mode=True,
+        )
+        results.append((phone, ok))
+
+    all_ok = bool(results) and all(ok for _, ok in results)
+    rows = "".join(
+        f"<tr><td dir='ltr'>{esc(phone)}</td><td>{'<span class=\'badge badge-active\'>تم الإرسال</span>' if ok else '<span class=\'badge badge-expired\'>فشل</span>'}</td></tr>"
+        for phone, ok in results
+    )
+    alert = (
+        "<div class='alert alert-ok'><strong>تم إرسال اختبار تأكيد الاستبدال للشريك ✅</strong><div style='margin-top:8px'>لم يتم استخدام أي قسيمة ولم يتغير أي طلب.</div></div>"
+        if all_ok
+        else "<div class='alert alert-error'><strong>لم تنجح كل رسائل الاختبار.</strong><div style='margin-top:8px'>راجع سجل العمليات.</div></div>"
+    )
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:860px;margin:auto;padding:24px'><h1>اختبار رسالة الشريك بعد استبدال QR</h1>{alert}<p><strong>المنتج:</strong> {esc(product_name)}</p><p><strong>اسم الشريك:</strong> {esc(partner_name)}</p><div class='table-wrap'><table><thead><tr><th>رقم الشريك</th><th>الحالة</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted' style='margin-top:14px'>رسالة الاختبار مميزة بوضوح بأنها لا تمثل استبدالاً حقيقياً.</p><a class='btn btn-muted' style='margin-top:12px' href='/admin/merchant-test?product_id={esc(product_id)}&sku={esc(sku)}'>العودة لبيانات المنتج</a></section></main>"""
+    return HTMLResponse(page_shell("اختبار تأكيد الاستبدال", body, admin=True), status_code=200 if all_ok else 502)
 
 
 @app.post("/webhooks/salla")
@@ -2138,7 +2503,7 @@ async def salla_webhook(
                 order_id=voucher_order_id,
                 product_id=product_id,
                 product_name=product_name,
-                merchant_name=merchant_name,
+                merchant_name=partner_name,
                 customer_name=customer_name,
                 customer_phone=customer_phone,
                 option_name=item_option_name(item),
