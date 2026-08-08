@@ -390,6 +390,103 @@ def send_voucher_whatsapp(
 
 
 
+def send_redemption_whatsapp(
+    voucher_id: int,
+    customer_phone: str,
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    merchant_name: str,
+    redeemed_at: datetime,
+) -> None:
+    """Notify the customer only after a voucher redemption succeeds."""
+    phone = normalize_saudi_phone(customer_phone)
+
+    if not phone:
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "redemption_whatsapp_skipped",
+                voucher_id,
+                "Customer phone is missing.",
+            )
+        return
+
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "redemption_whatsapp_skipped",
+                voucher_id,
+                "WhatsLoop environment variables are missing.",
+            )
+        return
+
+    name = (customer_name or "عميل بكجات").strip()
+    display_order_id = str(order_id or "").split(":", 1)[0]
+    used_at = fmt_dt(redeemed_at)
+    message = (
+        "✅ تم استخدام قسيمتك بنجاح\n\n"
+        f"مرحباً {name} 🌹\n\n"
+        "تم تأكيد استخدام قسيمتك واستلام الخدمة بنجاح.\n\n"
+        f"🎟️ العرض: {product_name}\n"
+        f"🔖 رقم القسيمة: {voucher_code}\n"
+        f"📦 رقم الطلب: {display_order_id}\n"
+        f"🏪 التاجر: {merchant_name}\n"
+        f"🕒 وقت الاستخدام: {used_at}\n\n"
+        "شكراً لاختيارك Pakgat 💙\n"
+        "بدون قروشة.. بكجات تضبطك"
+    )
+
+    body = json.dumps(
+        {"to": phone, "message": message},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "redemption_whatsapp_sent",
+                voucher_id,
+                f"phone={phone}; http_status={status_code}; response={response_text[:260]}",
+            )
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "redemption_whatsapp_failed",
+                voucher_id,
+                f"phone={phone}; http_status={exc.code}; response={error_text[:260]}",
+            )
+    except (URLError, TimeoutError, OSError) as exc:
+        with SessionLocal() as db:
+            log_event(
+                db,
+                "redemption_whatsapp_failed",
+                voucher_id,
+                f"phone={phone}; error={type(exc).__name__}: {exc}",
+            )
+
+
+
 def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
     existing = db.scalar(select(Voucher).where(Voucher.order_id == order_id, Voucher.product_id == product_id))
     if existing:
@@ -552,7 +649,7 @@ def verify_voucher(verification_token: str, db: Session = Depends(get_db)):
 
 
 @app.post("/v/{verification_token}/redeem", response_class=HTMLResponse)
-async def redeem_voucher(verification_token: str, request: Request, db: Session = Depends(get_db)):
+async def redeem_voucher(verification_token: str, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     voucher = db.scalar(select(Voucher).where(Voucher.verification_token == verification_token))
     if not voucher:
         raise HTTPException(status_code=404, detail="Voucher not found")
@@ -574,6 +671,17 @@ async def redeem_voucher(verification_token: str, request: Request, db: Session 
         update_voucher_status(voucher, db)
         return HTMLResponse(build_verification_page(voucher, "تعذر اعتماد القسيمة؛ ربما تم استخدامها في نفس اللحظة."), status_code=409)
     log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
+    background_tasks.add_task(
+        send_redemption_whatsapp,
+        voucher.id,
+        voucher.customer_phone or "",
+        voucher.customer_name or "",
+        voucher.product_name,
+        voucher.code,
+        voucher.order_id,
+        voucher.merchant_name,
+        voucher.redeemed_at or now_utc(),
+    )
     return HTMLResponse(build_verification_page(voucher))
 
 
@@ -692,17 +800,32 @@ def admin_voucher_detail(voucher_id: int, request: Request, created: int = 0, db
 
 
 @app.post("/admin/vouchers/{voucher_id}/redeem")
-def admin_redeem_voucher(voucher_id: int, request: Request, db: Session = Depends(get_db)):
+def admin_redeem_voucher(voucher_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     try:
         require_admin(request)
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
+    voucher = db.get(Voucher, voucher_id)
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher not found")
     result = db.execute(update(Voucher).where(Voucher.id == voucher_id, Voucher.status == "active", Voucher.expires_at >= now_utc()).values(status="redeemed", redeemed_at=now_utc()).execution_options(synchronize_session=False))
     db.commit()
     if result.rowcount != 1:
         log_event(db, "admin_redeem_failed", voucher_id, "Voucher was not active")
         raise HTTPException(status_code=409, detail="Voucher is not active")
+    db.refresh(voucher)
     log_event(db, "voucher_redeemed", voucher_id, "Redeemed from admin dashboard")
+    background_tasks.add_task(
+        send_redemption_whatsapp,
+        voucher.id,
+        voucher.customer_phone or "",
+        voucher.customer_name or "",
+        voucher.product_name,
+        voucher.code,
+        voucher.order_id,
+        voucher.merchant_name,
+        voucher.redeemed_at or now_utc(),
+    )
     return RedirectResponse(f"/admin/vouchers/{voucher_id}", status_code=303)
 
 
@@ -734,6 +857,9 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "whatsapp_sent": "إرسال القسيمة عبر واتساب",
         "whatsapp_failed": "فشل إرسال واتساب",
         "whatsapp_skipped": "تجاوز إرسال واتساب",
+        "redemption_whatsapp_sent": "إرسال تأكيد الاستخدام عبر واتساب",
+        "redemption_whatsapp_failed": "فشل إرسال تأكيد الاستخدام",
+        "redemption_whatsapp_skipped": "تجاوز تأكيد الاستخدام عبر واتساب",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
