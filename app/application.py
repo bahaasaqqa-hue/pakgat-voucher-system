@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-SALLA-PRODUCT-DIAGNOSTIC-v6
+# PAKGAT_BUILD: 2026-08-08-MERCHANT-NAME-WHATSAPP-v7
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-SALLA-PRODUCT-DIAGNOSTIC-v6"
+BUILD_VERSION = "2026-08-08-MERCHANT-NAME-WHATSAPP-v7"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -1043,9 +1043,12 @@ def send_merchant_sale_whatsapp(
     order_id: str,
     quantity: int,
     voucher_count: int,
+    test_mode: bool = False,
 ) -> None:
     phone = normalize_saudi_phone(merchant_phone)
     partner = (merchant_name or "شريك Pakgat").strip()
+    sent_action = "merchant_whatsapp_test_sent" if test_mode else "merchant_whatsapp_sent"
+    failed_action = "merchant_whatsapp_test_failed" if test_mode else "merchant_whatsapp_failed"
 
     if not phone:
         with SessionLocal() as db:
@@ -1054,7 +1057,7 @@ def send_merchant_sale_whatsapp(
                 row.status = "failed"
                 row.last_error = "Merchant phone is invalid."
                 db.commit()
-            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; invalid merchant phone")
+            log_event(db, failed_action, details=f"order={order_id}; invalid merchant phone")
         return
 
     if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
@@ -1064,20 +1067,22 @@ def send_merchant_sale_whatsapp(
                 row.status = "failed"
                 row.last_error = "WhatsLoop environment variables are missing."
                 db.commit()
-            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; WhatsLoop config missing")
+            log_event(db, failed_action, details=f"order={order_id}; WhatsLoop config missing")
         return
 
+    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد طلب حقيقي\n\n" if test_mode else ""
     message = (
-        f"🎉 تم بيع {product_name} عبر Pakgat\n\n"
+        test_prefix
+        + f"🎉 تم بيع **{product_name}** عبر Pakgat\n\n"
         f"مرحباً {partner}\n\n"
-        f"تم شراء {product_name} بنجاح عبر Pakgat.\n\n"
+        f"تم شراء **{product_name}** بنجاح عبر **Pakgat**.\n\n"
         f"📦 رقم الطلب: {order_id}\n"
         f"🔢 الكمية: {quantity}\n"
         f"🎫 عدد القسائم: {voucher_count}\n\n"
-        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR قبل استلام الخدمة.\n\n"
-        f"🔐 الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}\n\n"
+        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR **قبل استلام الخدمة**.\n\n"
+        f"🔐 **الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}**\n\n"
         "يتم تأكيد استلام الخدمة عند حضور العميل وعرض رمز QR الخاص بالقسيمة.\n\n"
-        "شكراً لشراكتكم مع Pakgat 💙"
+        "شكراً لشراكتكم مع **Pakgat** 💙"
     )
 
     body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
@@ -1105,7 +1110,7 @@ def send_merchant_sale_whatsapp(
                 db.commit()
             log_event(
                 db,
-                "merchant_whatsapp_sent",
+                sent_action,
                 details=(
                     f"order={order_id}; phone={masked_phone(phone)}; "
                     f"http_status={status_code}; response={response_text[:180]}"
@@ -1121,7 +1126,7 @@ def send_merchant_sale_whatsapp(
                 db.commit()
             log_event(
                 db,
-                "merchant_whatsapp_failed",
+                failed_action,
                 details=f"order={order_id}; phone={masked_phone(phone)}; http_status={exc.code}",
             )
     except (URLError, TimeoutError, OSError) as exc:
@@ -1133,7 +1138,7 @@ def send_merchant_sale_whatsapp(
                 db.commit()
             log_event(
                 db,
-                "merchant_whatsapp_failed",
+                failed_action,
                 details=f"order={order_id}; phone={masked_phone(phone)}; error={type(exc).__name__}",
             )
 
@@ -1522,6 +1527,8 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "merchant_phone_not_found": "لم يتم العثور على جوال الشريك",
         "merchant_whatsapp_sent": "إرسال إشعار البيع للشريك",
         "merchant_whatsapp_failed": "فشل إرسال إشعار البيع للشريك",
+        "merchant_whatsapp_test_sent": "اختبار إرسال واتساب للشريك",
+        "merchant_whatsapp_test_failed": "فشل اختبار واتساب للشريك",
         "merchant_whatsapp_duplicate_skipped": "تجاوز إشعار شريك مكرر",
         "salla_oauth_authorized": "حفظ تفويض سلة",
         "salla_oauth_failed": "فشل حفظ تفويض سلة",
@@ -1643,7 +1650,12 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
                 f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
                 f"<ul>{phone_rows}</ul>"
-                "<p class='muted'>اختبار قراءة فقط؛ لم يتم إرسال واتساب ولم يتم إنشاء قسيمة.</p>"
+                "<p class='muted'>تمت قراءة اسم الشريك ورقم الاستقبال من سلة. يمكنك الآن اختبار رسالة الشريك بدون شراء أو إنشاء قسيمة.</p>"
+                "<form method='post' action='/admin/merchant-notification-test' style='margin-top:14px'>"
+                f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
+                f"<input type='hidden' name='sku' value='{esc(sku)}'>"
+                "<button class='btn btn-primary' type='submit' onclick='return confirm(&quot;سيتم إرسال رسالة واتساب اختبارية إلى رقم الشريك المقروء من سلة. لا يوجد شراء أو قسيمة. متابعة؟&quot;);'>إرسال رسالة اختبار للشريك عبر واتساب</button>"
+                "</form>"
                 "</div>" + errors_html
             )
             log_event(db, "merchant_product_test_ok", details=f"product_id={product_id}; sku={sku}; source={source}; phones={','.join(masked_phone(p) for p in phones)}")
@@ -1662,7 +1674,7 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
 
     body = f"""<main class='wrap' style='padding:28px 0 48px'>
     <section class='card' style='max-width:920px;margin:auto;padding:24px'>
-      <h1>تشخيص رقم جوال الشريك من بيانات المنتج</h1>
+      <h1>تشخيص بيانات الشريك من سلة</h1>
       <p class='muted'>بدون شراء، بدون إنشاء قسيمة، وبدون إرسال واتساب. يستخدم Product Details الرسمي من Salla ويقارن القراءة بالـSKU والـProduct ID.</p>
       <form method='get' action='/admin/merchant-test'>
         <label>رقم المنتج في سلة (Product ID)</label>
@@ -1674,6 +1686,95 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
       <div style='margin-top:20px'>{result_box}</div>
     </section></main>"""
     return HTMLResponse(page_shell("تشخيص بيانات الشريك", body, admin=True))
+
+
+@app.post("/admin/merchant-notification-test", response_class=HTMLResponse)
+async def admin_merchant_notification_test(request: Request, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    form = parse_qs(raw)
+    product_id = (form.get("product_id", [""])[0] or "").strip()
+    sku = (form.get("sku", [""])[0] or "").strip()
+
+    if not product_id:
+        body = "<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>رقم المنتج غير موجود.</strong></div><a class='btn btn-muted' href='/admin/merchant-test'>العودة للتشخيص</a></section></main>"
+        return HTMLResponse(page_shell("اختبار واتساب الشريك", body, admin=True), status_code=400)
+
+    product_payload, product_error = fetch_salla_json_endpoint(
+        db, f"/products/{quote(product_id, safe='')}"
+    )
+    if (not product_payload or product_error) and sku:
+        product_payload, product_error = fetch_salla_json_endpoint(
+            db, f"/products/sku/{quote(sku, safe='')}"
+        )
+
+    metadata_payload, metadata_error = fetch_salla_json_endpoint(
+        db, f"/metadata/values/product/{quote(product_id, safe='')}"
+    )
+
+    raw_phone = None
+    partner_name = None
+    for payload in (metadata_payload, product_payload):
+        if payload is None:
+            continue
+        if not raw_phone:
+            raw_phone = find_labeled_metadata_value(payload, MERCHANT_PHONE_FIELD_LABELS)
+        if not partner_name:
+            partner_name = find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
+
+    phones = merchant_phone_candidates(raw_phone)
+    product_data = product_payload.get("data") if isinstance(product_payload, dict) else product_payload
+    if not isinstance(product_data, dict):
+        product_data = {}
+    product_name = str(product_data.get("name") or "عرض Pakgat").strip()
+    partner_name = partner_name or "شريك Pakgat"
+
+    if not phones:
+        error_detail = metadata_error or product_error or "لم يتم العثور على رقم جوال الشريك في بيانات المنتج."
+        log_event(db, "merchant_whatsapp_test_failed", details=f"product_id={product_id}; reason=phone_not_found")
+        body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>لم يتم إرسال الرسالة.</strong><div style='margin-top:8px'>تعذر قراءة رقم جوال الشريك من سلة في هذه المحاولة.</div></div><p class='muted' dir='ltr'>{esc(error_detail)}</p><a class='btn btn-muted' href='/admin/merchant-test?product_id={esc(product_id)}&sku={esc(sku)}'>العودة للتشخيص</a></section></main>"""
+        return HTMLResponse(page_shell("اختبار واتساب الشريك", body, admin=True), status_code=422)
+
+    results = []
+    for phone in phones:
+        test_order_id = f"TEST-{int(now_utc().timestamp())}-{phone[-4:]}"
+        notification_id = reserve_merchant_notification(db, test_order_id, product_id, phone)
+        if not notification_id:
+            results.append((phone, False, "تعذر حجز رسالة الاختبار."))
+            continue
+
+        send_merchant_sale_whatsapp(
+            notification_id,
+            phone,
+            partner_name,
+            product_name,
+            test_order_id,
+            1,
+            1,
+            test_mode=True,
+        )
+        db.expire_all()
+        row = db.get(MerchantNotification, notification_id)
+        ok = bool(row and row.status == "sent")
+        detail = "تم قبول الرسالة من WhatsLoop." if ok else ((row.last_error if row else None) or "فشل الإرسال.")
+        results.append((phone, ok, detail))
+
+    all_ok = bool(results) and all(ok for _, ok, _ in results)
+    rows = "".join(
+        f"<tr><td dir='ltr'>{esc(phone)}</td><td>{'<span class=\'badge badge-active\'>تم الإرسال</span>' if ok else '<span class=\'badge badge-expired\'>فشل</span>'}</td><td>{esc(detail)}</td></tr>"
+        for phone, ok, detail in results
+    )
+    alert = (
+        "<div class='alert alert-ok'><strong>تم إرسال رسالة الاختبار للشريك ✅</strong><div style='margin-top:8px'>لا يوجد طلب حقيقي، ولم يتم إنشاء أي قسيمة.</div></div>"
+        if all_ok
+        else "<div class='alert alert-error'><strong>لم تنجح كل رسائل الاختبار.</strong><div style='margin-top:8px'>راجع التفاصيل أدناه وسجل العمليات.</div></div>"
+    )
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:860px;margin:auto;padding:24px'><h1>اختبار إشعار الشريك عبر واتساب</h1>{alert}<p><strong>المنتج:</strong> {esc(product_name)}</p><p><strong>اسم الشريك المستخدم:</strong> {esc(partner_name)}</p><div class='table-wrap'><table><thead><tr><th>رقم الشريك</th><th>الحالة</th><th>التفاصيل</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted' style='margin-top:14px'>رسالة الاختبار تبدأ بعبارة واضحة بأنها اختبار ولا يوجد طلب حقيقي. الإرسال الحقيقي يبقى بالنص المعتمد بدون عبارة الاختبار.</p><a class='btn btn-muted' style='margin-top:12px' href='/admin/merchant-test?product_id={esc(product_id)}&sku={esc(sku)}'>العودة لبيانات المنتج</a></section></main>"""
+    return HTMLResponse(page_shell("اختبار واتساب الشريك", body, admin=True), status_code=200 if all_ok else 502)
 
 
 @app.post("/webhooks/salla")
@@ -1978,12 +2079,12 @@ async def salla_webhook(
         # Hidden product metadata may not be embedded in Salla order webhooks.
         # If a Merchant API token is configured, fetch the product metadata values
         # directly using the product_id as a safe fallback.
-        if not merchant_phone_raw:
+        if not merchant_phone_raw or not partner_name:
             fetched_metadata, metadata_error = fetch_salla_product_metadata(
                 db, product_id, salla_merchant_id
             )
             if fetched_metadata is not None:
-                merchant_phone_raw = find_labeled_metadata_value(
+                merchant_phone_raw = merchant_phone_raw or find_labeled_metadata_value(
                     fetched_metadata, MERCHANT_PHONE_FIELD_LABELS
                 )
                 partner_name = partner_name or find_labeled_metadata_value(
