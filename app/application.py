@@ -1,3 +1,4 @@
+# PAKGAT_BUILD: 2026-08-08-VIP-MERCHANT-FIX-v1
 import os
 import json
 import secrets
@@ -6,6 +7,7 @@ import hmac
 import html
 import io
 import smtplib
+import re
 from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -18,12 +20,16 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import qrcode
-from sqlalchemy import DateTime, Integer, String, create_engine, select, update, or_, func
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint, create_engine, select, update, or_, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.exc import IntegrityError
 
 
 def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
+
+
+BUILD_VERSION = "2026-08-08-VIP-MERCHANT-FIX-v1"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -67,6 +73,29 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(60), index=True)
     details: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class MerchantNotification(Base):
+    __tablename__ = "merchant_sale_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "order_id",
+            "product_id",
+            "merchant_phone",
+            name="uq_merchant_sale_notification",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[str] = mapped_column(String(100), index=True)
+    product_id: Mapped[str] = mapped_column(String(100), index=True)
+    merchant_phone: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
 
 class VoucherCreate(BaseModel):
@@ -135,6 +164,8 @@ app = FastAPI(title="Pakgat Voucher System", version="3.0", lifespan=lifespan)
 
 BASE_URL = env("PUBLIC_BASE_URL", "https://pakgat-voucher-system.onrender.com").rstrip("/")
 SALLA_WEBHOOK_SECRET = env("SALLA_WEBHOOK_SECRET")
+SALLA_ACCESS_TOKEN = env("SALLA_ACCESS_TOKEN")
+SALLA_API_BASE_URL = env("SALLA_API_BASE_URL", "https://api.salla.dev/admin/v2").rstrip("/")
 ADMIN_USERNAME = env("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = env("ADMIN_PASSWORD")
 ADMIN_SECRET = env("ADMIN_SECRET", SALLA_WEBHOOK_SECRET or "change-this-admin-secret")
@@ -148,6 +179,22 @@ except json.JSONDecodeError:
 VOUCHER_SKU_PREFIX = env("VOUCHER_SKU_PREFIX", "PKG-QR").upper()
 WHATSLOOP_API_BASE_URL = env("WHATSLOOP_API_BASE_URL").rstrip("/")
 WHATSLOOP_API_TOKEN = env("WHATSLOOP_API_TOKEN")
+
+MERCHANT_PHONE_FIELD_LABELS = {
+    "رقم جوال استقبال القسائم",
+    "رقم جوال استلام القسائم",
+    "جوال استقبال القسائم",
+    "merchant voucher phone",
+}
+PARTNER_NAME_FIELD_LABELS = {
+    "اسم الشريك",
+    "اسم التاجر",
+    "partner name",
+}
+MERCHANT_NOTIFICATION_PIN = (
+    env("MERCHANT_NOTIFICATION_PIN")
+    or str(MERCHANT_CODES.get("Pakgat") or MERCHANT_CODES.get("*") or "4826")
+).strip()
 
 
 BASE_CSS = """
@@ -262,6 +309,146 @@ def item_quantity(item: dict) -> int:
         return 1
 
 
+def normalize_metadata_label(value) -> str:
+    text = str(value or "").strip().lower()
+    for old, new in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ى", "ي"), ("ة", "ه")):
+        text = text.replace(old, new)
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def scalar_text(value) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (str, int, float)):
+        return str(value).strip() or None
+    if isinstance(value, dict):
+        for key in ("value", "text", "content", "name", "label", "title"):
+            candidate = value.get(key)
+            if isinstance(candidate, (str, int, float)) and str(candidate).strip():
+                return str(candidate).strip()
+    return None
+
+
+def find_labeled_metadata_value(obj, target_labels: set[str]) -> Optional[str]:
+    """Find a product custom-field value across common Salla metadata shapes."""
+    targets = {normalize_metadata_label(label) for label in target_labels}
+
+    def walk(node) -> Optional[str]:
+        if isinstance(node, dict):
+            # Shape 1: {"رقم جوال استقبال القسائم": "05..."}
+            for key, value in node.items():
+                if normalize_metadata_label(key) in targets:
+                    candidate = scalar_text(value)
+                    if candidate:
+                        return candidate
+
+            # Shape 2: {"label"/"name"/"title": "...", "value": "..."}
+            label = None
+            for label_key in ("label", "name", "title", "key", "field_name"):
+                candidate = node.get(label_key)
+                if isinstance(candidate, str) and candidate.strip():
+                    label = candidate
+                    break
+            if label and normalize_metadata_label(label) in targets:
+                for value_key in ("value", "field_value", "content", "text", "display_value"):
+                    candidate = scalar_text(node.get(value_key))
+                    if candidate:
+                        return candidate
+
+            for value in node.values():
+                found = walk(value)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = walk(value)
+                if found:
+                    return found
+        return None
+
+    return walk(obj)
+
+
+def merchant_phone_candidates(raw_value: Optional[str]) -> list[str]:
+    if not raw_value:
+        return []
+    # Accept one or two Saudi phone numbers even if the merchant enters spaces,
+    # commas, Arabic commas, plus signs, or line breaks in the custom field.
+    chunks = re.findall(r"(?:\+?966|00966|0)?5\d{8}", str(raw_value).replace(" ", ""))
+    phones: list[str] = []
+    for chunk in chunks:
+        phone = normalize_saudi_phone(chunk)
+        if phone and phone not in phones:
+            phones.append(phone)
+        if len(phones) >= 2:
+            break
+    return phones
+
+
+def masked_phone(phone: str) -> str:
+    value = str(phone or "")
+    if len(value) <= 4:
+        return "****"
+    return "*" * max(0, len(value) - 4) + value[-4:]
+
+
+def metadata_debug_paths(obj) -> list[str]:
+    """Return only metadata-like key paths; never log customer payload values."""
+    results: list[str] = []
+    keywords = ("metadata", "custom", "field", "section", "attribute", "detail")
+
+    def walk(node, path: str = "item") -> None:
+        if len(results) >= 12:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child = f"{path}.{key}"
+                low = str(key).lower()
+                if any(word in low for word in keywords):
+                    results.append(child)
+                walk(value, child)
+        elif isinstance(node, list):
+            for index, value in enumerate(node[:8]):
+                walk(value, f"{path}[{index}]")
+
+    walk(obj)
+    return results[:12]
+
+
+def fetch_salla_product_metadata(product_id: str) -> tuple[Optional[object], Optional[str]]:
+    """Optional fallback for hidden Salla product metadata.
+
+    Uses GET /metadata/values/product/{product_id} when SALLA_ACCESS_TOKEN is
+    configured. The webhook-only path remains the first choice.
+    """
+    if not SALLA_ACCESS_TOKEN:
+        return None, "SALLA_ACCESS_TOKEN is not configured"
+    if not product_id:
+        return None, "product_id is missing"
+
+    url = f"{SALLA_API_BASE_URL}/metadata/values/product/{quote(str(product_id), safe='')}"
+    req = UrlRequest(
+        url,
+        headers={
+            "Authorization": f"Bearer {SALLA_ACCESS_TOKEN}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(req, timeout=10) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and "data" in payload:
+            return payload.get("data"), None
+        return payload, None
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return None, f"HTTP {exc.code}: {body[:180]}"
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def generate_qr_png(url: str) -> bytes:
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
     qr.add_data(url)
@@ -329,17 +516,24 @@ def send_voucher_whatsapp(
 
     name = (customer_name or "عميل بكجات").strip()
     message = (
-        f"🎉 مرحباً {name}\n\n"
-        "شكراً لاختيارك Pakgat.\n\n"
+        "✅ قسيمتك جاهزة للاستخدام\n\n"
+        f"مرحباً {name} 🎁\n\n"
         "تم إصدار قسيمتك بنجاح.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {order_id}\n\n"
-        "اضغط هنا لعرض القسيمة ورمز QR:\n"
+        "افتح قسيمتك ورمز QR:\n"
         f"{verification_url}\n\n"
-        "لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
-        "ولا تعرضه للتاجر إلا عند استلام الخدمة.\n\n"
-        "نتمنى لك تجربة ممتعة 🌹"
+        "📲 عند استلام الخدمة، اعرض رمز QR للتاجر ليتم تأكيد الاستخدام.\n\n"
+        "🔒 لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
+        "ولا تعرضه إلا عند استلام الخدمة.\n\n"
+        "⭐ وعندنا لك شيء إضافي!\n\n"
+        "بما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا 💙\n\n"
+        "🎁 استخدم الكود VIP واحصل على خصم 5% على طلبك القادم.\n\n"
+        "يمكن عرضك القادم موجود من الآن 👀\n"
+        "https://pakgat.com\n\n"
+        "شكراً لاختيارك Pakgat\n"
+        "بدون قروشة.. بكجات تضبطك ✨"
     )
 
     body = json.dumps(
@@ -427,16 +621,20 @@ def send_redemption_whatsapp(
     display_order_id = str(order_id or "").split(":", 1)[0]
     used_at = fmt_dt(redeemed_at)
     message = (
-        "✅ تم استخدام قسيمتك بنجاح\n\n"
-        f"مرحباً {name} 🌹\n\n"
-        "تم تأكيد استخدام قسيمتك واستلام الخدمة بنجاح.\n\n"
+        "✅ تم استبدال قسيمتك بنجاح\n\n"
+        f"مرحباً {name} 🎁\n\n"
+        f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {display_order_id}\n"
-        f"🏪 التاجر: {merchant_name}\n"
         f"🕒 وقت الاستخدام: {used_at}\n\n"
-        "شكراً لاختيارك Pakgat 💙\n"
-        "بدون قروشة.. بكجات تضبطك"
+        "⭐ وبما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا.\n\n"
+        "🎁 استمتع بخصم 5% على طلبك القادم باستخدام الكود: VIP\n\n"
+        "اكتشف عرضك القادم:\n"
+        "https://pakgat.com\n\n"
+        "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
+        "شكراً لاختيارك Pakgat\n"
+        "بدون قروشة.. بكجات تضبطك ✨"
     )
 
     body = json.dumps(
@@ -485,6 +683,146 @@ def send_redemption_whatsapp(
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
 
+
+
+def reserve_merchant_notification(
+    db: Session,
+    order_id: str,
+    product_id: str,
+    merchant_phone: str,
+) -> Optional[int]:
+    existing = db.scalar(
+        select(MerchantNotification).where(
+            MerchantNotification.order_id == order_id,
+            MerchantNotification.product_id == product_id,
+            MerchantNotification.merchant_phone == merchant_phone,
+        )
+    )
+    if existing:
+        if existing.status == "failed":
+            existing.status = "queued"
+            existing.last_error = None
+            db.commit()
+            return existing.id
+        return None
+
+    notification = MerchantNotification(
+        order_id=order_id,
+        product_id=product_id,
+        merchant_phone=merchant_phone,
+        status="queued",
+    )
+    db.add(notification)
+    try:
+        db.commit()
+        db.refresh(notification)
+        return notification.id
+    except IntegrityError:
+        db.rollback()
+        return None
+
+
+def send_merchant_sale_whatsapp(
+    notification_id: int,
+    merchant_phone: str,
+    merchant_name: str,
+    product_name: str,
+    order_id: str,
+    quantity: int,
+    voucher_count: int,
+) -> None:
+    phone = normalize_saudi_phone(merchant_phone)
+    partner = (merchant_name or "شريك Pakgat").strip()
+
+    if not phone:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = "Merchant phone is invalid."
+                db.commit()
+            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; invalid merchant phone")
+        return
+
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = "WhatsLoop environment variables are missing."
+                db.commit()
+            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; WhatsLoop config missing")
+        return
+
+    message = (
+        f"🎉 تم بيع {product_name} عبر Pakgat\n\n"
+        f"مرحباً {partner}\n\n"
+        f"تم شراء {product_name} بنجاح عبر Pakgat.\n\n"
+        f"📦 رقم الطلب: {order_id}\n"
+        f"🔢 الكمية: {quantity}\n"
+        f"🎫 عدد القسائم: {voucher_count}\n\n"
+        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR قبل استلام الخدمة.\n\n"
+        f"🔐 الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}\n\n"
+        "يتم تأكيد استلام الخدمة عند حضور العميل وعرض رمز QR الخاص بالقسيمة.\n\n"
+        "شكراً لشراكتكم مع Pakgat 💙"
+    )
+
+    body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "sent"
+                row.sent_at = now_utc()
+                row.last_error = None
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_sent",
+                details=(
+                    f"order={order_id}; phone={masked_phone(phone)}; "
+                    f"http_status={status_code}; response={response_text[:180]}"
+                ),
+            )
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = f"HTTP {exc.code}: {error_text[:350]}"
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_failed",
+                details=f"order={order_id}; phone={masked_phone(phone)}; http_status={exc.code}",
+            )
+    except (URLError, TimeoutError, OSError) as exc:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = f"{type(exc).__name__}: {exc}"[:500]
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_failed",
+                details=f"order={order_id}; phone={masked_phone(phone)}; error={type(exc).__name__}",
+            )
 
 
 def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
@@ -602,14 +940,14 @@ def status_badge(value: str) -> str:
 
 @app.get("/")
 def home():
-    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "admin": BASE_URL + "/admin/login", "database": "connected"}
+    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "build": BUILD_VERSION, "admin": BASE_URL + "/admin/login", "database": "connected"}
 
 
 @app.get("/health")
 def health():
     with engine.connect():
         pass
-    return {"ok": True, "database": "connected"}
+    return {"ok": True, "database": "connected", "build": BUILD_VERSION}
 
 
 @app.post("/api/vouchers", response_model=VoucherResponse, status_code=status.HTTP_201_CREATED)
@@ -860,6 +1198,11 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "redemption_whatsapp_sent": "إرسال تأكيد الاستخدام عبر واتساب",
         "redemption_whatsapp_failed": "فشل إرسال تأكيد الاستخدام",
         "redemption_whatsapp_skipped": "تجاوز تأكيد الاستخدام عبر واتساب",
+        "merchant_phone_found": "تم العثور على جوال الشريك",
+        "merchant_phone_not_found": "لم يتم العثور على جوال الشريك",
+        "merchant_whatsapp_sent": "إرسال إشعار البيع للشريك",
+        "merchant_whatsapp_failed": "فشل إرسال إشعار البيع للشريك",
+        "merchant_whatsapp_duplicate_skipped": "تجاوز إشعار شريك مكرر",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
@@ -1146,6 +1489,7 @@ async def salla_webhook(
             continue
 
         matched_products += 1
+        quantity = item_quantity(item)
         log_event(
             db,
             "salla_product_matched",
@@ -1155,7 +1499,50 @@ async def salla_webhook(
             ),
         )
 
-        for index in range(1, item_quantity(item) + 1):
+        merchant_phone_raw = find_labeled_metadata_value(item, MERCHANT_PHONE_FIELD_LABELS)
+        partner_name = find_labeled_metadata_value(item, PARTNER_NAME_FIELD_LABELS)
+        metadata_source = "webhook"
+        metadata_error = None
+
+        # Hidden product metadata may not be embedded in Salla order webhooks.
+        # If a Merchant API token is configured, fetch the product metadata values
+        # directly using the product_id as a safe fallback.
+        if not merchant_phone_raw:
+            fetched_metadata, metadata_error = fetch_salla_product_metadata(product_id)
+            if fetched_metadata is not None:
+                merchant_phone_raw = find_labeled_metadata_value(
+                    fetched_metadata, MERCHANT_PHONE_FIELD_LABELS
+                )
+                partner_name = partner_name or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_NAME_FIELD_LABELS
+                )
+                metadata_source = "salla_metadata_api"
+
+        merchant_phones = merchant_phone_candidates(merchant_phone_raw)
+        partner_name = partner_name or "شريك Pakgat"
+
+        if merchant_phones:
+            log_event(
+                db,
+                "merchant_phone_found",
+                details=(
+                    f"Order {base_order_id}; product_id={product_id}; source={metadata_source}; "
+                    f"phones={','.join(masked_phone(p) for p in merchant_phones)}"
+                ),
+            )
+        else:
+            debug_paths = metadata_debug_paths(item)
+            log_event(
+                db,
+                "merchant_phone_not_found",
+                details=(
+                    f"Order {base_order_id}; product_id={product_id}; "
+                    f"metadata_paths={','.join(debug_paths) if debug_paths else 'none'}; "
+                    f"fallback={metadata_error or metadata_source}"
+                ),
+            )
+
+        for index in range(1, quantity + 1):
             voucher_order_id = f"{base_order_id}:{product_id}:{index}"
             existing = db.scalar(
                 select(Voucher).where(
@@ -1220,6 +1607,38 @@ async def salla_webhook(
                     "whatsapp_skipped",
                     voucher.id,
                     f"WhatsApp skipped for order {base_order_id}: customer phone is missing.",
+                )
+
+        # Merchant notification is intentionally outside voucher creation.
+        # This lets us re-trigger the SAME paid Salla order after deployment:
+        # existing vouchers are left untouched, while the merchant notification
+        # can still be sent once if it has not already been delivered.
+        for merchant_phone in merchant_phones:
+            notification_id = reserve_merchant_notification(
+                db,
+                base_order_id,
+                product_id,
+                merchant_phone,
+            )
+            if notification_id:
+                background_tasks.add_task(
+                    send_merchant_sale_whatsapp,
+                    notification_id,
+                    merchant_phone,
+                    partner_name,
+                    product_name,
+                    base_order_id,
+                    quantity,
+                    quantity,
+                )
+            else:
+                log_event(
+                    db,
+                    "merchant_whatsapp_duplicate_skipped",
+                    details=(
+                        f"Order {base_order_id}; product_id={product_id}; "
+                        f"phone={masked_phone(merchant_phone)}"
+                    ),
                 )
 
     log_event(
