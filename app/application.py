@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-CF-FIX-v4
+# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-DIAGNOSTIC-v5
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-SALLA-METADATA-CF-FIX-v4"
+BUILD_VERSION = "2026-08-08-SALLA-METADATA-DIAGNOSTIC-v5"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -609,6 +609,102 @@ def salla_access_token_for(db: Session, merchant_id: str = "") -> tuple[Optional
     if SALLA_ACCESS_TOKEN:
         return SALLA_ACCESS_TOKEN, None, "environment"
     return None, "Salla access token is not available", "none"
+
+
+def fetch_salla_json_endpoint(
+    db: Session,
+    path: str,
+    merchant_id: str = "",
+) -> tuple[Optional[object], Optional[str]]:
+    """GET a Salla Merchant API endpoint using stored OAuth credentials."""
+    token, token_error, token_source = salla_access_token_for(db, merchant_id)
+    if not token:
+        return None, token_error or "Salla access token is unavailable"
+
+    url = f"{SALLA_API_BASE_URL}{path}"
+
+    def request_with(active_token: str):
+        req = UrlRequest(
+            url,
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "X-Pakgat-App": "530632947",
+            },
+            method="GET",
+        )
+        with urlopen(req, timeout=10) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        return json.loads(raw)
+
+    try:
+        return request_with(token), None
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 401 and token_source.startswith("database"):
+            refreshed, refresh_error = refresh_salla_credential(merchant_id)
+            if refreshed:
+                try:
+                    return request_with(refreshed), None
+                except HTTPError as retry_exc:
+                    retry_body = retry_exc.read().decode("utf-8", errors="replace")
+                    return None, f"HTTP {retry_exc.code} after refresh: {retry_body[:180]}"
+                except (URLError, TimeoutError, OSError, ValueError) as retry_exc:
+                    return None, f"retry {type(retry_exc).__name__}: {retry_exc}"
+            return None, refresh_error or f"HTTP 401: {body[:180]}"
+        return None, f"HTTP {exc.code}: {body[:180]}"
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def metadata_definition_summary(payload: object) -> list[dict]:
+    """Return non-secret product metadata definitions for diagnostics."""
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(data, list):
+        return []
+    out = []
+    for group in data:
+        if not isinstance(group, dict):
+            continue
+        fields = []
+        for field in group.get("fields") or []:
+            if isinstance(field, dict):
+                fields.append({
+                    "id": str(field.get("id") or ""),
+                    "name": str(field.get("name") or ""),
+                    "type": str(field.get("type") or ""),
+                })
+        out.append({
+            "id": str(group.get("id") or ""),
+            "name": str(group.get("name") or ""),
+            "visible": group.get("visible"),
+            "owner": str(group.get("owner") or ""),
+            "fields": fields,
+        })
+    return out
+
+
+def diagnostic_key_paths(obj: object, limit: int = 80) -> list[str]:
+    """List object key paths only (never values/tokens) for safe diagnostics."""
+    paths: list[str] = []
+    def walk(value, path=""):
+        if len(paths) >= limit:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                current = f"{path}.{key}" if path else str(key)
+                paths.append(current)
+                walk(child, current)
+                if len(paths) >= limit:
+                    return
+        elif isinstance(value, list):
+            for i, child in enumerate(value[:3]):
+                walk(child, f"{path}[{i}]")
+                if len(paths) >= limit:
+                    return
+    walk(obj)
+    return paths[:limit]
 
 
 def fetch_salla_product_metadata(
@@ -1464,50 +1560,104 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", db: Ses
     product_id = (product_id or "").strip()
     result_box = ""
     if product_id:
-        metadata, error = fetch_salla_product_metadata(db, product_id)
-        if metadata is None:
-            result_box = (
-                "<div class='alert alert-error'><strong>تعذر قراءة بيانات المنتج من سلة.</strong>"
-                f"<div style='margin-top:8px' dir='ltr'>{esc(error or 'Unknown error')}</div></div>"
+        values_payload, values_error = fetch_salla_json_endpoint(
+            db, f"/metadata/values/product/{quote(str(product_id), safe='')}"
+        )
+        definitions_payload, definitions_error = fetch_salla_json_endpoint(
+            db, "/metadata?entity=product"
+        )
+        product_payload, product_error = fetch_salla_json_endpoint(
+            db, f"/products/{quote(str(product_id), safe='')}"
+        )
+
+        # Search all three safe product-side responses for the configured labels.
+        raw_phone = None
+        partner_name = None
+        source = None
+        for label, payload in (
+            ("metadata_values", values_payload),
+            ("metadata_definitions", definitions_payload),
+            ("product_details", product_payload),
+        ):
+            if payload is None:
+                continue
+            candidate = find_labeled_metadata_value(payload, MERCHANT_PHONE_FIELD_LABELS)
+            if candidate and not raw_phone:
+                raw_phone = candidate
+                source = label
+            if not partner_name:
+                partner_name = find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
+
+        phones = merchant_phone_candidates(raw_phone)
+        definitions = metadata_definition_summary(definitions_payload or {})
+        defs_html = ""
+        if definitions:
+            rows = []
+            for group in definitions:
+                fields = ", ".join(f"{f['name']} ({f['type']})" for f in group['fields']) or "—"
+                rows.append(
+                    f"<tr><td>{esc(group['name'] or '—')}</td><td>{'نعم' if group['visible'] else 'لا'}</td><td>{esc(group['owner'] or '—')}</td><td>{esc(fields)}</td></tr>"
+                )
+            defs_html = (
+                "<div class='card' style='padding:20px;margin-top:14px'><h3>تعريفات الحقول المخصصة التي أعادتها سلة</h3>"
+                "<div class='table-wrap'><table><tr><th>القسم</th><th>ظاهر</th><th>المالك</th><th>الحقول</th></tr>"
+                + "".join(rows) + "</table></div></div>"
             )
-            log_event(db, "merchant_metadata_test_failed", details=f"product_id={product_id}; error={(error or 'unknown')[:220]}")
         else:
-            raw_phone = find_labeled_metadata_value(metadata, MERCHANT_PHONE_FIELD_LABELS)
-            phones = merchant_phone_candidates(raw_phone)
-            partner_name = find_labeled_metadata_value(metadata, PARTNER_NAME_FIELD_LABELS)
-            if phones:
-                phone_rows = "".join(f"<li dir='ltr'><strong>{esc(p)}</strong></li>" for p in phones)
-                result_box = (
-                    "<div class='alert alert-ok'><strong>تمت قراءة بيانات المنتج بنجاح ✅</strong></div>"
-                    "<div class='card' style='padding:20px;margin-top:14px'>"
-                    f"<p><strong>رقم المنتج:</strong> <span dir='ltr'>{esc(product_id)}</span></p>"
-                    f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود في الحقول المقروءة')}</p>"
-                    "<p><strong>رقم جوال استقبال القسائم:</strong></p>"
-                    f"<ul>{phone_rows}</ul>"
-                    "<p class='muted'>هذا اختبار قراءة فقط؛ لم يتم إرسال أي رسالة واتساب ولم يتم إنشاء أي قسيمة.</p>"
-                    "</div>"
-                )
-                log_event(db, "merchant_metadata_test_ok", details=f"product_id={product_id}; phones={','.join(masked_phone(p) for p in phones)}")
-            else:
-                paths = metadata_debug_paths(metadata)
-                result_box = (
-                    "<div class='alert alert-error'><strong>تم الوصول إلى بيانات المنتج، لكن حقل رقم جوال استقبال القسائم لم يتم العثور عليه.</strong>"
-                    f"<div style='margin-top:8px'>المسارات الوصفية المكتشفة: {esc(', '.join(paths[:20]) if paths else 'لا يوجد')}</div></div>"
-                )
-                log_event(db, "merchant_metadata_test_no_phone", details=f"product_id={product_id}; metadata_paths={','.join(paths[:20]) if paths else 'none'}")
+            defs_html = "<div class='alert alert-error' style='margin-top:14px'><strong>سلة لم تُرجع أي تعريفات حقول مخصصة للمنتجات لهذا التطبيق.</strong></div>"
+
+        error_parts = []
+        if values_error:
+            error_parts.append(f"metadata values: {values_error}")
+        if definitions_error:
+            error_parts.append(f"metadata definitions: {definitions_error}")
+        if product_error:
+            error_parts.append(f"product details: {product_error}")
+        errors_html = ""
+        if error_parts:
+            errors_html = "<div class='alert alert-error' style='margin-top:14px' dir='ltr'>" + esc(" | ".join(error_parts)) + "</div>"
+
+        if phones:
+            phone_rows = "".join(f"<li dir='ltr'><strong>{esc(p)}</strong></li>" for p in phones)
+            result_box = (
+                "<div class='alert alert-ok'><strong>تم العثور على رقم جوال استقبال القسائم ✅</strong></div>"
+                "<div class='card' style='padding:20px;margin-top:14px'>"
+                f"<p><strong>رقم المنتج:</strong> <span dir='ltr'>{esc(product_id)}</span></p>"
+                f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
+                f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
+                f"<ul>{phone_rows}</ul>"
+                "<p class='muted'>اختبار قراءة فقط؛ لم يتم إرسال واتساب ولم يتم إنشاء قسيمة.</p>"
+                "</div>" + defs_html + errors_html
+            )
+            log_event(db, "merchant_metadata_test_ok", details=f"product_id={product_id}; source={source}; phones={','.join(masked_phone(p) for p in phones)}")
+        else:
+            value_paths = diagnostic_key_paths(values_payload or {})
+            product_paths = diagnostic_key_paths(product_payload or {})
+            result_box = (
+                "<div class='alert alert-error'><strong>الوصول إلى Salla API ناجح، لكن رقم الجوال لم يُقرأ بعد.</strong>"
+                "<div style='margin-top:8px'>الخطوة التشخيصية الآن هي مقارنة تعريفات الحقول مع استجابة قيم المنتج.</div></div>"
+                + defs_html
+                + "<div class='card' style='padding:20px;margin-top:14px'><h3>شكل الاستجابات (أسماء المفاتيح فقط)</h3>"
+                f"<p><strong>Metadata values:</strong> <code>{esc(', '.join(value_paths[:40]) if value_paths else 'لا يوجد')}</code></p>"
+                f"<p><strong>Product details:</strong> <code>{esc(', '.join(product_paths[:40]) if product_paths else 'لا يوجد')}</code></p>"
+                "<p class='muted'>لا يتم عرض Access Token أو Refresh Token أو بيانات العملاء في هذا التشخيص.</p></div>"
+                + errors_html
+            )
+            def_names = [g.get('name','') for g in definitions]
+            log_event(db, "merchant_metadata_diagnostic", details=f"product_id={product_id}; groups={len(definitions)}; group_names={','.join(def_names)[:300]}; values_paths={','.join(value_paths[:20]) if value_paths else 'none'}")
 
     body = f"""<main class='wrap' style='padding:28px 0 48px'>
-    <section class='card' style='max-width:760px;margin:auto;padding:24px'>
-      <h1>اختبار قراءة رقم جوال الشريك من سلة</h1>
-      <p class='muted'>اختبار مباشر من بيانات المنتج بدون شراء، بدون إنشاء قسيمة وبدون إرسال واتساب.</p>
+    <section class='card' style='max-width:920px;margin:auto;padding:24px'>
+      <h1>تشخيص رقم جوال الشريك من سلة</h1>
+      <p class='muted'>بدون شراء، بدون إنشاء قسيمة، وبدون إرسال واتساب. يفحص تعريفات الحقول وقيم المنتج وتفاصيل المنتج.</p>
       <form method='get' action='/admin/merchant-test'>
         <label>رقم المنتج في سلة (Product ID)</label>
         <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='1181243277' required>
-        <button class='btn btn-blue' style='margin-top:14px' type='submit'>اختبار القراءة</button>
+        <button class='btn btn-blue' style='margin-top:14px' type='submit'>تشخيص القراءة</button>
       </form>
       <div style='margin-top:20px'>{result_box}</div>
     </section></main>"""
-    return HTMLResponse(page_shell("اختبار بيانات الشريك", body, admin=True))
+    return HTMLResponse(page_shell("تشخيص بيانات الشريك", body, admin=True))
 
 
 @app.post("/webhooks/salla")
