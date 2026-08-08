@@ -427,20 +427,16 @@ def send_redemption_whatsapp(
     display_order_id = str(order_id or "").split(":", 1)[0]
     used_at = fmt_dt(redeemed_at)
     message = (
-        "✅ تم استبدال قسيمتك بنجاح\n\n"
-        f"مرحباً {name} 🎁\n\n"
-        f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
+        "✅ تم استخدام قسيمتك بنجاح\n\n"
+        f"مرحباً {name} 🌹\n\n"
+        "تم تأكيد استخدام قسيمتك واستلام الخدمة بنجاح.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {display_order_id}\n"
+        f"🏪 التاجر: {merchant_name}\n"
         f"🕒 وقت الاستخدام: {used_at}\n\n"
-        "⭐ وبما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا.\n\n"
-        "🎁 استمتع بخصم 5% على طلبك القادم باستخدام الكود: VIP\n\n"
-        "اكتشف عرضك القادم:\n"
-        "https://pakgat.com\n\n"
-        "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
-        "شكراً لاختيارك Pakgat\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+        "شكراً لاختيارك Pakgat 💙\n"
+        "بدون قروشة.. بكجات تضبطك"
     )
 
     body = json.dumps(
