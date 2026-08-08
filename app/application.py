@@ -1,3 +1,4 @@
+# PAKGAT_BUILD: 2026-08-08-SALLA-METADATA-TEST-v3
 import os
 import json
 import secrets
@@ -6,11 +7,12 @@ import hmac
 import html
 import io
 import smtplib
+import re
 from email.message import EmailMessage
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -18,12 +20,16 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import qrcode
-from sqlalchemy import DateTime, Integer, String, create_engine, select, update, or_, func
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint, create_engine, select, update, or_, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.exc import IntegrityError
 
 
 def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
+
+
+BUILD_VERSION = "2026-08-08-SALLA-METADATA-TEST-v3"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -67,6 +73,47 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(60), index=True)
     details: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class MerchantNotification(Base):
+    __tablename__ = "merchant_sale_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "order_id",
+            "product_id",
+            "merchant_phone",
+            name="uq_merchant_sale_notification",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[str] = mapped_column(String(100), index=True)
+    product_id: Mapped[str] = mapped_column(String(100), index=True)
+    merchant_phone: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
+class SallaOAuthCredential(Base):
+    __tablename__ = "salla_oauth_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    access_token: Mapped[str] = mapped_column(String(2048))
+    refresh_token: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    scope: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    token_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class VoucherCreate(BaseModel):
@@ -135,6 +182,11 @@ app = FastAPI(title="Pakgat Voucher System", version="3.0", lifespan=lifespan)
 
 BASE_URL = env("PUBLIC_BASE_URL", "https://pakgat-voucher-system.onrender.com").rstrip("/")
 SALLA_WEBHOOK_SECRET = env("SALLA_WEBHOOK_SECRET")
+SALLA_ACCESS_TOKEN = env("SALLA_ACCESS_TOKEN")
+SALLA_CLIENT_ID = env("SALLA_CLIENT_ID")
+SALLA_CLIENT_SECRET = env("SALLA_CLIENT_SECRET")
+SALLA_OAUTH_TOKEN_URL = env("SALLA_OAUTH_TOKEN_URL", "https://accounts.salla.sa/oauth2/token")
+SALLA_API_BASE_URL = env("SALLA_API_BASE_URL", "https://api.salla.dev/admin/v2").rstrip("/")
 ADMIN_USERNAME = env("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = env("ADMIN_PASSWORD")
 ADMIN_SECRET = env("ADMIN_SECRET", SALLA_WEBHOOK_SECRET or "change-this-admin-secret")
@@ -148,6 +200,22 @@ except json.JSONDecodeError:
 VOUCHER_SKU_PREFIX = env("VOUCHER_SKU_PREFIX", "PKG-QR").upper()
 WHATSLOOP_API_BASE_URL = env("WHATSLOOP_API_BASE_URL").rstrip("/")
 WHATSLOOP_API_TOKEN = env("WHATSLOOP_API_TOKEN")
+
+MERCHANT_PHONE_FIELD_LABELS = {
+    "رقم جوال استقبال القسائم",
+    "رقم جوال استلام القسائم",
+    "جوال استقبال القسائم",
+    "merchant voucher phone",
+}
+PARTNER_NAME_FIELD_LABELS = {
+    "اسم الشريك",
+    "اسم التاجر",
+    "partner name",
+}
+MERCHANT_NOTIFICATION_PIN = (
+    env("MERCHANT_NOTIFICATION_PIN")
+    or str(MERCHANT_CODES.get("Pakgat") or MERCHANT_CODES.get("*") or "4826")
+).strip()
 
 
 BASE_CSS = """
@@ -262,6 +330,338 @@ def item_quantity(item: dict) -> int:
         return 1
 
 
+def normalize_metadata_label(value) -> str:
+    text = str(value or "").strip().lower()
+    for old, new in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ى", "ي"), ("ة", "ه")):
+        text = text.replace(old, new)
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def scalar_text(value) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (str, int, float)):
+        return str(value).strip() or None
+    if isinstance(value, dict):
+        for key in ("value", "text", "content", "name", "label", "title"):
+            candidate = value.get(key)
+            if isinstance(candidate, (str, int, float)) and str(candidate).strip():
+                return str(candidate).strip()
+    return None
+
+
+def find_labeled_metadata_value(obj, target_labels: set[str]) -> Optional[str]:
+    """Find a product custom-field value across common Salla metadata shapes."""
+    targets = {normalize_metadata_label(label) for label in target_labels}
+
+    def walk(node) -> Optional[str]:
+        if isinstance(node, dict):
+            # Shape 1: {"رقم جوال استقبال القسائم": "05..."}
+            for key, value in node.items():
+                if normalize_metadata_label(key) in targets:
+                    candidate = scalar_text(value)
+                    if candidate:
+                        return candidate
+
+            # Shape 2: {"label"/"name"/"title": "...", "value": "..."}
+            label = None
+            for label_key in ("label", "name", "title", "key", "field_name"):
+                candidate = node.get(label_key)
+                if isinstance(candidate, str) and candidate.strip():
+                    label = candidate
+                    break
+            if label and normalize_metadata_label(label) in targets:
+                for value_key in ("value", "field_value", "content", "text", "display_value"):
+                    candidate = scalar_text(node.get(value_key))
+                    if candidate:
+                        return candidate
+
+            for value in node.values():
+                found = walk(value)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = walk(value)
+                if found:
+                    return found
+        return None
+
+    return walk(obj)
+
+
+def merchant_phone_candidates(raw_value: Optional[str]) -> list[str]:
+    if not raw_value:
+        return []
+    # Accept one or two Saudi phone numbers even if the merchant enters spaces,
+    # commas, Arabic commas, plus signs, or line breaks in the custom field.
+    chunks = re.findall(r"(?:\+?966|00966|0)?5\d{8}", str(raw_value).replace(" ", ""))
+    phones: list[str] = []
+    for chunk in chunks:
+        phone = normalize_saudi_phone(chunk)
+        if phone and phone not in phones:
+            phones.append(phone)
+        if len(phones) >= 2:
+            break
+    return phones
+
+
+def masked_phone(phone: str) -> str:
+    value = str(phone or "")
+    if len(value) <= 4:
+        return "****"
+    return "*" * max(0, len(value) - 4) + value[-4:]
+
+
+def metadata_debug_paths(obj) -> list[str]:
+    """Return only metadata-like key paths; never log customer payload values."""
+    results: list[str] = []
+    keywords = ("metadata", "custom", "field", "section", "attribute", "detail")
+
+    def walk(node, path: str = "item") -> None:
+        if len(results) >= 12:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child = f"{path}.{key}"
+                low = str(key).lower()
+                if any(word in low for word in keywords):
+                    results.append(child)
+                walk(value, child)
+        elif isinstance(node, list):
+            for index, value in enumerate(node[:8]):
+                walk(value, f"{path}[{index}]")
+
+    walk(obj)
+    return results[:12]
+
+
+def parse_salla_expiry(value) -> Optional[datetime]:
+    """Normalize Salla token expiry values.
+
+    app.store.authorize documents `expires` as a Unix timestamp. Token refresh
+    responses can also use relative seconds, so both shapes are accepted.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 1_000_000_000:
+        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+    if numeric > 0:
+        return now_utc() + timedelta(seconds=numeric)
+    return None
+
+
+def payload_merchant_id(payload: dict) -> str:
+    merchant = payload.get("merchant")
+    if isinstance(merchant, dict):
+        merchant = merchant.get("id") or merchant.get("merchant_id") or merchant.get("store_id")
+    if merchant in (None, ""):
+        merchant = first_value(
+            payload,
+            "data.merchant.id",
+            "data.merchant_id",
+            "data.store.id",
+            "data.store_id",
+        )
+    return str(merchant or "").strip()
+
+
+def store_salla_authorization(db: Session, payload: dict) -> tuple[bool, str]:
+    """Persist Easy Mode OAuth credentials without ever logging token values."""
+    merchant_id = payload_merchant_id(payload)
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        return False, "authorization payload data is invalid"
+
+    access_token = str(data.get("access_token") or "").strip()
+    refresh_token = str(data.get("refresh_token") or "").strip() or None
+    scope = str(data.get("scope") or "").strip() or None
+    token_type = str(data.get("token_type") or "bearer").strip() or "bearer"
+    expires_at = parse_salla_expiry(data.get("expires") or data.get("expires_in"))
+
+    if not merchant_id:
+        return False, "merchant id is missing"
+    if not access_token:
+        return False, "access token is missing"
+
+    credential = db.scalar(
+        select(SallaOAuthCredential).where(SallaOAuthCredential.merchant_id == merchant_id)
+    )
+    if credential:
+        credential.access_token = access_token
+        credential.refresh_token = refresh_token or credential.refresh_token
+        credential.scope = scope
+        credential.token_type = token_type
+        credential.expires_at = expires_at
+        credential.updated_at = now_utc()
+    else:
+        credential = SallaOAuthCredential(
+            merchant_id=merchant_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            scope=scope,
+            token_type=token_type,
+            expires_at=expires_at,
+            created_at=now_utc(),
+            updated_at=now_utc(),
+        )
+        db.add(credential)
+    db.commit()
+    return True, merchant_id
+
+
+def latest_salla_credential(db: Session, merchant_id: str = "") -> Optional[SallaOAuthCredential]:
+    if merchant_id:
+        row = db.scalar(
+            select(SallaOAuthCredential).where(SallaOAuthCredential.merchant_id == merchant_id)
+        )
+        if row:
+            return row
+    return db.scalar(
+        select(SallaOAuthCredential).order_by(SallaOAuthCredential.updated_at.desc()).limit(1)
+    )
+
+
+def refresh_salla_credential(merchant_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Refresh one merchant token under a database row lock.
+
+    Salla refresh tokens are single-use. `FOR UPDATE` prevents two workers from
+    consuming the same refresh token in parallel.
+    """
+    if not SALLA_CLIENT_ID or not SALLA_CLIENT_SECRET:
+        return None, "SALLA_CLIENT_ID/SALLA_CLIENT_SECRET are not configured"
+
+    with SessionLocal() as refresh_db:
+        stmt = select(SallaOAuthCredential)
+        if merchant_id:
+            stmt = stmt.where(SallaOAuthCredential.merchant_id == merchant_id)
+        stmt = stmt.order_by(SallaOAuthCredential.updated_at.desc()).with_for_update()
+        credential = refresh_db.scalar(stmt)
+        if not credential:
+            return None, "stored Salla authorization was not found"
+
+        # Another worker may have refreshed while this worker waited for the lock.
+        if credential.expires_at and credential.expires_at > now_utc() + timedelta(minutes=5):
+            return credential.access_token, None
+        if not credential.refresh_token:
+            return None, "stored Salla refresh token is missing"
+
+        body = urlencode(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": credential.refresh_token,
+                "client_id": SALLA_CLIENT_ID,
+                "client_secret": SALLA_CLIENT_SECRET,
+            }
+        ).encode("utf-8")
+        req = UrlRequest(
+            SALLA_OAUTH_TOKEN_URL,
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=12) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw)
+        except HTTPError as exc:
+            response_body = exc.read().decode("utf-8", errors="replace")
+            return None, f"OAuth refresh HTTP {exc.code}: {response_body[:180]}"
+        except (URLError, TimeoutError, OSError, ValueError) as exc:
+            return None, f"OAuth refresh {type(exc).__name__}: {exc}"
+
+        new_access = str(payload.get("access_token") or "").strip()
+        new_refresh = str(payload.get("refresh_token") or "").strip()
+        if not new_access:
+            return None, "OAuth refresh response did not contain access_token"
+
+        credential.access_token = new_access
+        if new_refresh:
+            credential.refresh_token = new_refresh
+        credential.scope = str(payload.get("scope") or credential.scope or "").strip() or None
+        credential.token_type = str(payload.get("token_type") or credential.token_type or "bearer")
+        credential.expires_at = parse_salla_expiry(
+            payload.get("expires") or payload.get("expires_in")
+        )
+        credential.updated_at = now_utc()
+        refresh_db.commit()
+        return new_access, None
+
+
+def salla_access_token_for(db: Session, merchant_id: str = "") -> tuple[Optional[str], Optional[str], str]:
+    credential = latest_salla_credential(db, merchant_id)
+    if credential:
+        if credential.expires_at and credential.expires_at <= now_utc() + timedelta(minutes=5):
+            token, error = refresh_salla_credential(credential.merchant_id)
+            if token:
+                return token, None, "database_refreshed"
+            return None, error, "database"
+        return credential.access_token, None, "database"
+    if SALLA_ACCESS_TOKEN:
+        return SALLA_ACCESS_TOKEN, None, "environment"
+    return None, "Salla access token is not available", "none"
+
+
+def fetch_salla_product_metadata(
+    db: Session,
+    product_id: str,
+    merchant_id: str = "",
+) -> tuple[Optional[object], Optional[str]]:
+    """Read hidden Salla product metadata using the stored Easy Mode token."""
+    if not product_id:
+        return None, "product_id is missing"
+
+    token, token_error, token_source = salla_access_token_for(db, merchant_id)
+    if not token:
+        return None, token_error or "Salla access token is unavailable"
+
+    url = f"{SALLA_API_BASE_URL}/metadata/values/product/{quote(str(product_id), safe='')}"
+
+    def request_with(active_token: str):
+        req = UrlRequest(
+            url,
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urlopen(req, timeout=10) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and "data" in payload:
+            return payload.get("data")
+        return payload
+
+    try:
+        return request_with(token), None
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        # If a stored OAuth access token was revoked/expired unexpectedly, refresh
+        # exactly once and retry. Environment-only tokens cannot be refreshed.
+        if exc.code == 401 and token_source.startswith("database"):
+            refreshed, refresh_error = refresh_salla_credential(merchant_id)
+            if refreshed:
+                try:
+                    return request_with(refreshed), None
+                except HTTPError as retry_exc:
+                    retry_body = retry_exc.read().decode("utf-8", errors="replace")
+                    return None, f"HTTP {retry_exc.code} after refresh: {retry_body[:180]}"
+                except (URLError, TimeoutError, OSError, ValueError) as retry_exc:
+                    return None, f"retry {type(retry_exc).__name__}: {retry_exc}"
+            return None, refresh_error or f"HTTP 401: {body[:180]}"
+        return None, f"HTTP {exc.code}: {body[:180]}"
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def generate_qr_png(url: str) -> bytes:
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
     qr.add_data(url)
@@ -329,17 +729,24 @@ def send_voucher_whatsapp(
 
     name = (customer_name or "عميل بكجات").strip()
     message = (
-        f"🎉 مرحباً {name}\n\n"
-        "شكراً لاختيارك Pakgat.\n\n"
+        "✅ قسيمتك جاهزة للاستخدام\n\n"
+        f"مرحباً {name} 🎁\n\n"
         "تم إصدار قسيمتك بنجاح.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {order_id}\n\n"
-        "اضغط هنا لعرض القسيمة ورمز QR:\n"
+        "افتح قسيمتك ورمز QR:\n"
         f"{verification_url}\n\n"
-        "لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
-        "ولا تعرضه للتاجر إلا عند استلام الخدمة.\n\n"
-        "نتمنى لك تجربة ممتعة 🌹"
+        "📲 عند استلام الخدمة، اعرض رمز QR للتاجر ليتم تأكيد الاستخدام.\n\n"
+        "🔒 لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
+        "ولا تعرضه إلا عند استلام الخدمة.\n\n"
+        "⭐ وعندنا لك شيء إضافي!\n\n"
+        "بما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا 💙\n\n"
+        "🎁 استخدم الكود VIP واحصل على خصم 5% على طلبك القادم.\n\n"
+        "يمكن عرضك القادم موجود من الآن 👀\n"
+        "https://pakgat.com\n\n"
+        "شكراً لاختيارك Pakgat\n"
+        "بدون قروشة.. بكجات تضبطك ✨"
     )
 
     body = json.dumps(
@@ -427,16 +834,20 @@ def send_redemption_whatsapp(
     display_order_id = str(order_id or "").split(":", 1)[0]
     used_at = fmt_dt(redeemed_at)
     message = (
-        "✅ تم استخدام قسيمتك بنجاح\n\n"
-        f"مرحباً {name} 🌹\n\n"
-        "تم تأكيد استخدام قسيمتك واستلام الخدمة بنجاح.\n\n"
+        "✅ تم استبدال قسيمتك بنجاح\n\n"
+        f"مرحباً {name} 🎁\n\n"
+        f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
         f"🎟️ العرض: {product_name}\n"
         f"🔖 رقم القسيمة: {voucher_code}\n"
         f"📦 رقم الطلب: {display_order_id}\n"
-        f"🏪 التاجر: {merchant_name}\n"
         f"🕒 وقت الاستخدام: {used_at}\n\n"
-        "شكراً لاختيارك Pakgat 💙\n"
-        "بدون قروشة.. بكجات تضبطك"
+        "⭐ وبما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا.\n\n"
+        "🎁 استمتع بخصم 5% على طلبك القادم باستخدام الكود: VIP\n\n"
+        "اكتشف عرضك القادم:\n"
+        "https://pakgat.com\n\n"
+        "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
+        "شكراً لاختيارك Pakgat\n"
+        "بدون قروشة.. بكجات تضبطك ✨"
     )
 
     body = json.dumps(
@@ -485,6 +896,146 @@ def send_redemption_whatsapp(
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
 
+
+
+def reserve_merchant_notification(
+    db: Session,
+    order_id: str,
+    product_id: str,
+    merchant_phone: str,
+) -> Optional[int]:
+    existing = db.scalar(
+        select(MerchantNotification).where(
+            MerchantNotification.order_id == order_id,
+            MerchantNotification.product_id == product_id,
+            MerchantNotification.merchant_phone == merchant_phone,
+        )
+    )
+    if existing:
+        if existing.status == "failed":
+            existing.status = "queued"
+            existing.last_error = None
+            db.commit()
+            return existing.id
+        return None
+
+    notification = MerchantNotification(
+        order_id=order_id,
+        product_id=product_id,
+        merchant_phone=merchant_phone,
+        status="queued",
+    )
+    db.add(notification)
+    try:
+        db.commit()
+        db.refresh(notification)
+        return notification.id
+    except IntegrityError:
+        db.rollback()
+        return None
+
+
+def send_merchant_sale_whatsapp(
+    notification_id: int,
+    merchant_phone: str,
+    merchant_name: str,
+    product_name: str,
+    order_id: str,
+    quantity: int,
+    voucher_count: int,
+) -> None:
+    phone = normalize_saudi_phone(merchant_phone)
+    partner = (merchant_name or "شريك Pakgat").strip()
+
+    if not phone:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = "Merchant phone is invalid."
+                db.commit()
+            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; invalid merchant phone")
+        return
+
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = "WhatsLoop environment variables are missing."
+                db.commit()
+            log_event(db, "merchant_whatsapp_failed", details=f"order={order_id}; WhatsLoop config missing")
+        return
+
+    message = (
+        f"🎉 تم بيع {product_name} عبر Pakgat\n\n"
+        f"مرحباً {partner}\n\n"
+        f"تم شراء {product_name} بنجاح عبر Pakgat.\n\n"
+        f"📦 رقم الطلب: {order_id}\n"
+        f"🔢 الكمية: {quantity}\n"
+        f"🎫 عدد القسائم: {voucher_count}\n\n"
+        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR قبل استلام الخدمة.\n\n"
+        f"🔐 الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}\n\n"
+        "يتم تأكيد استلام الخدمة عند حضور العميل وعرض رمز QR الخاص بالقسيمة.\n\n"
+        "شكراً لشراكتكم مع Pakgat 💙"
+    )
+
+    body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "sent"
+                row.sent_at = now_utc()
+                row.last_error = None
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_sent",
+                details=(
+                    f"order={order_id}; phone={masked_phone(phone)}; "
+                    f"http_status={status_code}; response={response_text[:180]}"
+                ),
+            )
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = f"HTTP {exc.code}: {error_text[:350]}"
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_failed",
+                details=f"order={order_id}; phone={masked_phone(phone)}; http_status={exc.code}",
+            )
+    except (URLError, TimeoutError, OSError) as exc:
+        with SessionLocal() as db:
+            row = db.get(MerchantNotification, notification_id)
+            if row:
+                row.status = "failed"
+                row.last_error = f"{type(exc).__name__}: {exc}"[:500]
+                db.commit()
+            log_event(
+                db,
+                "merchant_whatsapp_failed",
+                details=f"order={order_id}; phone={masked_phone(phone)}; error={type(exc).__name__}",
+            )
 
 
 def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
@@ -602,14 +1153,21 @@ def status_badge(value: str) -> str:
 
 @app.get("/")
 def home():
-    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "admin": BASE_URL + "/admin/login", "database": "connected"}
+    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "build": BUILD_VERSION, "admin": BASE_URL + "/admin/login", "database": "connected"}
 
 
 @app.get("/health")
 def health():
     with engine.connect():
         pass
-    return {"ok": True, "database": "connected"}
+    with SessionLocal() as db:
+        oauth_ready = db.scalar(select(func.count(SallaOAuthCredential.id))) or 0
+    return {
+        "ok": True,
+        "database": "connected",
+        "build": BUILD_VERSION,
+        "salla_oauth": "connected" if oauth_ready else "waiting_authorization",
+    }
 
 
 @app.post("/api/vouchers", response_model=VoucherResponse, status_code=status.HTTP_201_CREATED)
@@ -860,6 +1418,13 @@ def admin_audit(request: Request, db: Session = Depends(get_db)):
         "redemption_whatsapp_sent": "إرسال تأكيد الاستخدام عبر واتساب",
         "redemption_whatsapp_failed": "فشل إرسال تأكيد الاستخدام",
         "redemption_whatsapp_skipped": "تجاوز تأكيد الاستخدام عبر واتساب",
+        "merchant_phone_found": "تم العثور على جوال الشريك",
+        "merchant_phone_not_found": "لم يتم العثور على جوال الشريك",
+        "merchant_whatsapp_sent": "إرسال إشعار البيع للشريك",
+        "merchant_whatsapp_failed": "فشل إرسال إشعار البيع للشريك",
+        "merchant_whatsapp_duplicate_skipped": "تجاوز إشعار شريك مكرر",
+        "salla_oauth_authorized": "حفظ تفويض سلة",
+        "salla_oauth_failed": "فشل حفظ تفويض سلة",
     }
     rows = "".join(
         f"<tr><td>{fmt_dt(item.created_at)}</td><td>{esc(action_labels.get(item.action, item.action))}</td><td>{esc(voucher_codes.get(item.voucher_id, item.voucher_id or '—'))}</td><td>{esc(item.details or '—')}</td></tr>"
@@ -881,8 +1446,64 @@ def admin_integrations(request: Request):
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.updated</code> هو الحدث الرئيسي المعتمد من إعدادات التطبيق، مع دعم <code>order.payment.updated</code> إن وصل. تُصدر القسيمة عند تأكيد الدفع صراحة، أو اكتمال المبلغ المدفوع، أو وصول الطلب إلى الحالة النهائية <code>closed/completed</code> في إعداد المتجر الإلكتروني الحالي.</p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تحديث الطلب من سلة ← التحقق من الدفع الفعلي ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR مرة واحدة ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.updated</code> هو الحدث الرئيسي المعتمد من إعدادات التطبيق، مع دعم <code>order.payment.updated</code> إن وصل. تُصدر القسيمة عند تأكيد الدفع صراحة، أو اكتمال المبلغ المدفوع، أو وصول الطلب إلى الحالة النهائية <code>closed/completed</code> في إعداد المتجر الإلكتروني الحالي.</p><h2 style='margin-top:24px'>اختبار رقم جوال الشريك</h2><p><a class='btn btn-blue' href='/admin/merchant-test?product_id=1181243277'>اختبار قراءة المنتج 1181243277 بدون شراء</a></p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تحديث الطلب من سلة ← التحقق من الدفع الفعلي ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR مرة واحدة ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
+
+
+@app.get("/admin/merchant-test", response_class=HTMLResponse)
+def admin_merchant_metadata_test(request: Request, product_id: str = "", db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    product_id = (product_id or "").strip()
+    result_box = ""
+    if product_id:
+        metadata, error = fetch_salla_product_metadata(db, product_id)
+        if metadata is None:
+            result_box = (
+                "<div class='alert alert-error'><strong>تعذر قراءة بيانات المنتج من سلة.</strong>"
+                f"<div style='margin-top:8px' dir='ltr'>{esc(error or 'Unknown error')}</div></div>"
+            )
+            log_event(db, "merchant_metadata_test_failed", details=f"product_id={product_id}; error={(error or 'unknown')[:220]}")
+        else:
+            raw_phone = find_labeled_metadata_value(metadata, MERCHANT_PHONE_FIELD_LABELS)
+            phones = merchant_phone_candidates(raw_phone)
+            partner_name = find_labeled_metadata_value(metadata, PARTNER_NAME_FIELD_LABELS)
+            if phones:
+                phone_rows = "".join(f"<li dir='ltr'><strong>{esc(p)}</strong></li>" for p in phones)
+                result_box = (
+                    "<div class='alert alert-ok'><strong>تمت قراءة بيانات المنتج بنجاح ✅</strong></div>"
+                    "<div class='card' style='padding:20px;margin-top:14px'>"
+                    f"<p><strong>رقم المنتج:</strong> <span dir='ltr'>{esc(product_id)}</span></p>"
+                    f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود في الحقول المقروءة')}</p>"
+                    "<p><strong>رقم جوال استقبال القسائم:</strong></p>"
+                    f"<ul>{phone_rows}</ul>"
+                    "<p class='muted'>هذا اختبار قراءة فقط؛ لم يتم إرسال أي رسالة واتساب ولم يتم إنشاء أي قسيمة.</p>"
+                    "</div>"
+                )
+                log_event(db, "merchant_metadata_test_ok", details=f"product_id={product_id}; phones={','.join(masked_phone(p) for p in phones)}")
+            else:
+                paths = metadata_debug_paths(metadata)
+                result_box = (
+                    "<div class='alert alert-error'><strong>تم الوصول إلى بيانات المنتج، لكن حقل رقم جوال استقبال القسائم لم يتم العثور عليه.</strong>"
+                    f"<div style='margin-top:8px'>المسارات الوصفية المكتشفة: {esc(', '.join(paths[:20]) if paths else 'لا يوجد')}</div></div>"
+                )
+                log_event(db, "merchant_metadata_test_no_phone", details=f"product_id={product_id}; metadata_paths={','.join(paths[:20]) if paths else 'none'}")
+
+    body = f"""<main class='wrap' style='padding:28px 0 48px'>
+    <section class='card' style='max-width:760px;margin:auto;padding:24px'>
+      <h1>اختبار قراءة رقم جوال الشريك من سلة</h1>
+      <p class='muted'>اختبار مباشر من بيانات المنتج بدون شراء، بدون إنشاء قسيمة وبدون إرسال واتساب.</p>
+      <form method='get' action='/admin/merchant-test'>
+        <label>رقم المنتج في سلة (Product ID)</label>
+        <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='1181243277' required>
+        <button class='btn btn-blue' style='margin-top:14px' type='submit'>اختبار القراءة</button>
+      </form>
+      <div style='margin-top:20px'>{result_box}</div>
+    </section></main>"""
+    return HTMLResponse(page_shell("اختبار بيانات الشريك", body, admin=True))
 
 
 @app.post("/webhooks/salla")
@@ -920,6 +1541,28 @@ async def salla_webhook(
         "salla_webhook_received",
         details=f"Event received: {event or 'unknown'}",
     )
+
+    # Salla Easy Mode sends fresh OAuth credentials with app.store.authorize.
+    # Handle this before order-event filtering. Tokens are stored in the database
+    # and their raw values are never written to logs or responses.
+    if event in {"app.store.authorize", "app.store.authorized"}:
+        stored, result = store_salla_authorization(db, payload)
+        if stored:
+            credential = latest_salla_credential(db, result)
+            log_event(
+                db,
+                "salla_oauth_authorized",
+                details=(
+                    f"merchant={result}; scope={credential.scope or 'unknown'}; "
+                    f"expires_at={fmt_dt(credential.expires_at)}"
+                ),
+            )
+            return {"ok": True, "event": event, "oauth": "stored"}
+        log_event(db, "salla_oauth_failed", details=f"Event={event}; reason={result}")
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "event": event, "detail": result},
+        )
 
     # Security rule: vouchers are issued only after Salla confirms payment.
     # Other order events are logged for visibility but never create a voucher.
@@ -1107,6 +1750,7 @@ async def salla_webhook(
     merchant_name = str(
         first_value(payload, "merchant.name", "merchant.store_name") or "Pakgat"
     )
+    salla_merchant_id = payload_merchant_id(payload)
 
     items = normalize_items(data)
     if not items:
@@ -1146,6 +1790,7 @@ async def salla_webhook(
             continue
 
         matched_products += 1
+        quantity = item_quantity(item)
         log_event(
             db,
             "salla_product_matched",
@@ -1155,7 +1800,52 @@ async def salla_webhook(
             ),
         )
 
-        for index in range(1, item_quantity(item) + 1):
+        merchant_phone_raw = find_labeled_metadata_value(item, MERCHANT_PHONE_FIELD_LABELS)
+        partner_name = find_labeled_metadata_value(item, PARTNER_NAME_FIELD_LABELS)
+        metadata_source = "webhook"
+        metadata_error = None
+
+        # Hidden product metadata may not be embedded in Salla order webhooks.
+        # If a Merchant API token is configured, fetch the product metadata values
+        # directly using the product_id as a safe fallback.
+        if not merchant_phone_raw:
+            fetched_metadata, metadata_error = fetch_salla_product_metadata(
+                db, product_id, salla_merchant_id
+            )
+            if fetched_metadata is not None:
+                merchant_phone_raw = find_labeled_metadata_value(
+                    fetched_metadata, MERCHANT_PHONE_FIELD_LABELS
+                )
+                partner_name = partner_name or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_NAME_FIELD_LABELS
+                )
+                metadata_source = "salla_metadata_api"
+
+        merchant_phones = merchant_phone_candidates(merchant_phone_raw)
+        partner_name = partner_name or "شريك Pakgat"
+
+        if merchant_phones:
+            log_event(
+                db,
+                "merchant_phone_found",
+                details=(
+                    f"Order {base_order_id}; product_id={product_id}; source={metadata_source}; "
+                    f"phones={','.join(masked_phone(p) for p in merchant_phones)}"
+                ),
+            )
+        else:
+            debug_paths = metadata_debug_paths(item)
+            log_event(
+                db,
+                "merchant_phone_not_found",
+                details=(
+                    f"Order {base_order_id}; product_id={product_id}; "
+                    f"metadata_paths={','.join(debug_paths) if debug_paths else 'none'}; "
+                    f"fallback={metadata_error or metadata_source}"
+                ),
+            )
+
+        for index in range(1, quantity + 1):
             voucher_order_id = f"{base_order_id}:{product_id}:{index}"
             existing = db.scalar(
                 select(Voucher).where(
@@ -1220,6 +1910,38 @@ async def salla_webhook(
                     "whatsapp_skipped",
                     voucher.id,
                     f"WhatsApp skipped for order {base_order_id}: customer phone is missing.",
+                )
+
+        # Merchant notification is intentionally outside voucher creation.
+        # This lets us re-trigger the SAME paid Salla order after deployment:
+        # existing vouchers are left untouched, while the merchant notification
+        # can still be sent once if it has not already been delivered.
+        for merchant_phone in merchant_phones:
+            notification_id = reserve_merchant_notification(
+                db,
+                base_order_id,
+                product_id,
+                merchant_phone,
+            )
+            if notification_id:
+                background_tasks.add_task(
+                    send_merchant_sale_whatsapp,
+                    notification_id,
+                    merchant_phone,
+                    partner_name,
+                    product_name,
+                    base_order_id,
+                    quantity,
+                    quantity,
+                )
+            else:
+                log_event(
+                    db,
+                    "merchant_whatsapp_duplicate_skipped",
+                    details=(
+                        f"Order {base_order_id}; product_id={product_id}; "
+                        f"phone={masked_phone(merchant_phone)}"
+                    ),
                 )
 
     log_event(
