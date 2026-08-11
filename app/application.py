@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.0
+# PAKGAT_BUILD: 2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.1
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.0"
+BUILD_VERSION = "2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.1"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -248,6 +248,16 @@ PARTNER_CONTACT_FIELD_LABELS = {
     "هاتف التواصل",
     "contact number",
     "contact phone",
+}
+PARTNER_ADDRESS_FIELD_LABELS = {
+    "العنوان",
+    "عنوان الشريك",
+    "عنوان التاجر",
+    "عنوان الفرع",
+    "العنوان المختصر",
+    "address",
+    "partner address",
+    "branch address",
 }
 PARTNER_MAP_FIELD_LABELS = {
     "رابط خرائط Google",
@@ -852,6 +862,51 @@ def normalize_saudi_phone(phone: str) -> str:
     return digits
 
 
+def build_voucher_whatsapp_message(
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    verification_url: str,
+    partner_name: Optional[str] = None,
+    partner_hours: Optional[str] = None,
+    partner_contact: Optional[str] = None,
+    partner_address: Optional[str] = None,
+    partner_map_url: Optional[str] = None,
+) -> str:
+    """Build the single customer purchase message used by production and admin tests."""
+    name = (customer_name or "عميل بكجات").strip()
+
+    partner_lines: list[str] = []
+    if partner_name and str(partner_name).strip():
+        partner_lines.append(f"مقدم الخدمة: {str(partner_name).strip()}")
+    if partner_hours and str(partner_hours).strip():
+        partner_lines.append(f"ساعات العمل: {str(partner_hours).strip()}")
+    if partner_contact and str(partner_contact).strip():
+        partner_lines.append(f"التواصل: {str(partner_contact).strip()}")
+    if partner_address and str(partner_address).strip():
+        partner_lines.append(f"العنوان: {str(partner_address).strip()}")
+    if partner_map_url and str(partner_map_url).strip():
+        partner_lines.append(f"الموقع: {str(partner_map_url).strip()}")
+    partner_block = ("\\n".join(partner_lines) + "\\n\\n") if partner_lines else ""
+
+    return (
+        "✅ قسيمتك جاهزة\\n\\n"
+        f"مرحباً {name}\\n"
+        "تم إصدار قسيمتك بنجاح.\\n"
+        "كود VIP: خصم 5% على طلبك القادم.\\n\\n"
+        f"العرض: {product_name}\\n"
+        f"القسيمة: {voucher_code}\\n"
+        f"الطلب: {order_id}\\n\\n"
+        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\\n"
+        f"{verification_url}\\n\\n"
+        + partner_block
+        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\\n\\n"
+        "https://pakgat.com\\n"
+        "بدون قروشة.. بكجات تضبطك"
+    )
+
+
 def send_voucher_whatsapp(
     voucher_id: int,
     customer_phone: str,
@@ -863,6 +918,7 @@ def send_voucher_whatsapp(
     partner_name: Optional[str] = None,
     partner_hours: Optional[str] = None,
     partner_contact: Optional[str] = None,
+    partner_address: Optional[str] = None,
     partner_map_url: Optional[str] = None,
 ) -> None:
     phone = normalize_saudi_phone(customer_phone)
@@ -877,33 +933,17 @@ def send_voucher_whatsapp(
             log_event(db, "whatsapp_skipped", voucher_id, "WhatsLoop environment variables are missing.")
         return
 
-    name = (customer_name or "عميل بكجات").strip()
-
-    partner_lines: list[str] = []
-    if partner_name and str(partner_name).strip():
-        partner_lines.append(f"مقدم الخدمة: {str(partner_name).strip()}")
-    if partner_hours and str(partner_hours).strip():
-        partner_lines.append(f"ساعات العمل: {str(partner_hours).strip()}")
-    if partner_contact and str(partner_contact).strip():
-        partner_lines.append(f"التواصل: {str(partner_contact).strip()}")
-    if partner_map_url and str(partner_map_url).strip():
-        partner_lines.append(f"الموقع: {str(partner_map_url).strip()}")
-    partner_block = ("\n".join(partner_lines) + "\n\n") if partner_lines else ""
-
-    message = (
-        "✅ قسيمتك جاهزة\n\n"
-        f"مرحباً {name}\n"
-        "تم إصدار قسيمتك بنجاح.\n"
-        "كود VIP: خصم 5% على طلبك القادم.\n\n"
-        f"العرض: {product_name}\n"
-        f"القسيمة: {voucher_code}\n"
-        f"الطلب: {order_id}\n\n"
-        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\n"
-        f"{verification_url}\n\n"
-        + partner_block
-        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\n\n"
-        "https://pakgat.com\n"
-        "بدون قروشة.. بكجات تضبطك"
+    message = build_voucher_whatsapp_message(
+        customer_name=customer_name,
+        product_name=product_name,
+        voucher_code=voucher_code,
+        order_id=order_id,
+        verification_url=verification_url,
+        partner_name=partner_name,
+        partner_hours=partner_hours,
+        partner_contact=partner_contact,
+        partner_address=partner_address,
+        partner_map_url=partner_map_url,
     )
 
     body = json.dumps(
@@ -951,7 +991,6 @@ def send_voucher_whatsapp(
                 voucher_id,
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
-
 
 def send_redemption_whatsapp(
     voucher_id: int,
@@ -1904,6 +1943,7 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
         partner_name = None
         partner_hours = None
         partner_contact = None
+        partner_address = None
         partner_map_url = None
         source = None
         for label, payload in (
@@ -1923,6 +1963,8 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 partner_hours = find_labeled_metadata_value(payload, PARTNER_HOURS_FIELD_LABELS)
             if not partner_contact:
                 partner_contact = find_labeled_metadata_value(payload, PARTNER_CONTACT_FIELD_LABELS)
+            if not partner_address:
+                partner_address = find_labeled_metadata_value(payload, PARTNER_ADDRESS_FIELD_LABELS)
             if not partner_map_url:
                 partner_map_url = find_labeled_metadata_value(payload, PARTNER_MAP_FIELD_LABELS)
 
@@ -1973,11 +2015,19 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
                 f"<p><strong>ساعات العمل:</strong> {esc(partner_hours or 'غير موجود')}</p>"
                 f"<p><strong>رقم التواصل:</strong> <span dir='ltr'>{esc(partner_contact or 'غير موجود')}</span></p>"
+                f"<p><strong>العنوان:</strong> {esc(partner_address or 'غير موجود')}</p>"
                 f"<p><strong>رابط خرائط Google:</strong> <span dir='ltr'>{esc(partner_map_url or 'غير موجود')}</span></p>"
                 "<p><strong>رقم جوال استقبال القسائم:</strong></p>"
                 f"<ul>{phone_rows}</ul>"
                 f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
                 "<p class='muted'>اختبار قراءة فقط؛ أي حقل غير موجود لن يظهر لاحقاً في رسالة العميل.</p>"
+                "<form method='post' action='/admin/customer-voucher-notification-test' style='margin-top:18px;padding-top:16px;border-top:1px solid #e5e7eb'>"
+                f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
+                f"<input type='hidden' name='sku' value='{esc(sku)}'>"
+                "<label><strong>اختبار رسالة العميل النهائية</strong></label>"
+                "<input class='input' name='test_phone' dir='ltr' placeholder='05xxxxxxxx' required style='margin-top:8px'>"
+                "<button class='btn btn-blue' type='submit' style='margin-top:10px' onclick='return confirm(&quot;سيتم إرسال رسالة واتساب اختبارية إلى الرقم الذي أدخلته. لا يوجد شراء أو قسيمة حقيقية. متابعة؟&quot;);'>إرسال اختبار رسالة العميل</button>"
+                "</form>"
                 "<form method='post' action='/admin/merchant-notification-test' style='margin-top:14px'>"
                 f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
                 f"<input type='hidden' name='sku' value='{esc(sku)}'>"
@@ -2018,6 +2068,122 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
       <div style='margin-top:20px'>{result_box}</div>
     </section></main>"""
     return HTMLResponse(page_shell("تشخيص بيانات الشريك", body, admin=True))
+
+
+@app.post("/admin/customer-voucher-notification-test", response_class=HTMLResponse)
+async def admin_customer_voucher_notification_test(request: Request, db: Session = Depends(get_db)):
+    """Send the exact customer purchase-message layout as a safe admin test."""
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    form = parse_qs(raw)
+    product_id = (form.get("product_id", [""])[0] or "").strip()
+    sku = (form.get("sku", [""])[0] or "").strip()
+    test_phone_raw = (form.get("test_phone", [""])[0] or "").strip()
+    test_phone = normalize_saudi_phone(test_phone_raw)
+
+    back_url = f"/admin/merchant-test?product_id={quote(product_id, safe='')}&sku={quote(sku, safe='')}"
+
+    if not product_id:
+        body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>رقم المنتج غير موجود.</strong></div><a class='btn btn-muted' href='{esc(back_url)}'>العودة للتشخيص</a></section></main>"""
+        return HTMLResponse(page_shell("اختبار رسالة العميل", body, admin=True), status_code=400)
+
+    if not (test_phone.startswith("9665") and len(test_phone) == 12):
+        body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:760px;margin:auto;padding:24px'><div class='alert alert-error'><strong>رقم جوال الاختبار غير صحيح.</strong><div style='margin-top:8px'>استخدم رقم سعودي بصيغة 05xxxxxxxx أو 9665xxxxxxxx.</div></div><a class='btn btn-muted' href='{esc(back_url)}'>العودة للتشخيص</a></section></main>"""
+        return HTMLResponse(page_shell("اختبار رسالة العميل", body, admin=True), status_code=400)
+
+    metadata_payload, metadata_error = fetch_salla_json_endpoint(
+        db, f"/metadata/values/product/{quote(product_id, safe='')}"
+    )
+    product_payload, product_error = fetch_salla_json_endpoint(
+        db, f"/products/{quote(product_id, safe='')}"
+    )
+
+    partner_name = None
+    partner_hours = None
+    partner_contact = None
+    partner_address = None
+    partner_map_url = None
+    for payload in (metadata_payload, product_payload):
+        if payload is None:
+            continue
+        partner_name = partner_name or find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
+        partner_hours = partner_hours or find_labeled_metadata_value(payload, PARTNER_HOURS_FIELD_LABELS)
+        partner_contact = partner_contact or find_labeled_metadata_value(payload, PARTNER_CONTACT_FIELD_LABELS)
+        partner_address = partner_address or find_labeled_metadata_value(payload, PARTNER_ADDRESS_FIELD_LABELS)
+        partner_map_url = partner_map_url or find_labeled_metadata_value(payload, PARTNER_MAP_FIELD_LABELS)
+
+    product_data = product_payload.get("data") if isinstance(product_payload, dict) else product_payload
+    if not isinstance(product_data, dict):
+        product_data = {}
+    product_name = str(product_data.get("name") or "عرض اختبار من Pakgat")
+
+    customer_message = build_voucher_whatsapp_message(
+        customer_name="عميل اختبار",
+        product_name=product_name,
+        voucher_code="PKG-TEST",
+        order_id="TEST-0001",
+        verification_url="https://pakgat.com",
+        partner_name=partner_name,
+        partner_hours=partner_hours,
+        partner_contact=partner_contact,
+        partner_address=partner_address,
+        partner_map_url=partner_map_url,
+    )
+    message = "🧪 اختبار فقط — لا توجد عملية شراء حقيقية\n\n" + customer_message
+
+    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:820px;margin:auto;padding:24px'><div class='alert alert-error'><strong>تعذر الإرسال: إعدادات WhatsLoop غير مكتملة.</strong></div><a class='btn btn-muted' href='{esc(back_url)}'>العودة للتشخيص</a></section></main>"""
+        return HTMLResponse(page_shell("اختبار رسالة العميل", body, admin=True), status_code=500)
+
+    request_body = json.dumps({"to": test_phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    req = UrlRequest(
+        f"{WHATSLOOP_API_BASE_URL}/messages/send-text",
+        data=request_body,
+        headers={
+            "Authorization": f"Bearer {WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    ok = False
+    detail = ""
+    try:
+        with urlopen(req, timeout=25) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            status_code = getattr(response, "status", response.getcode())
+        ok = 200 <= int(status_code) < 300
+        detail = f"HTTP {status_code}"
+        log_event(db, "customer_voucher_test_sent", details=f"product_id={product_id}; phone={masked_phone(test_phone)}; status={status_code}")
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        detail = f"HTTP {exc.code}: {error_text[:260]}"
+        log_event(db, "customer_voucher_test_failed", details=f"product_id={product_id}; phone={masked_phone(test_phone)}; status={exc.code}")
+    except (URLError, TimeoutError, OSError) as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        log_event(db, "customer_voucher_test_failed", details=f"product_id={product_id}; phone={masked_phone(test_phone)}; error={type(exc).__name__}")
+
+    status_html = (
+        "<div class='alert alert-ok'><strong>تم إرسال رسالة اختبار العميل بنجاح ✅</strong></div>"
+        if ok else
+        "<div class='alert alert-error'><strong>فشل إرسال رسالة اختبار العميل.</strong></div>"
+    )
+    fields = (
+        f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
+        f"<p><strong>ساعات العمل:</strong> {esc(partner_hours or 'غير موجود')}</p>"
+        f"<p><strong>رقم التواصل:</strong> <span dir='ltr'>{esc(partner_contact or 'غير موجود')}</span></p>"
+        f"<p><strong>العنوان:</strong> {esc(partner_address or 'غير موجود')}</p>"
+        f"<p><strong>رابط خرائط Google:</strong> <span dir='ltr'>{esc(partner_map_url or 'غير موجود')}</span></p>"
+    )
+    source_errors = " | ".join(x for x in (metadata_error, product_error) if x)
+    source_html = f"<p class='muted' dir='ltr'>{esc(source_errors)}</p>" if source_errors else ""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:860px;margin:auto;padding:24px'><h1>اختبار رسالة العميل</h1>{status_html}<p><strong>رقم الاختبار:</strong> <span dir='ltr'>{esc(masked_phone(test_phone))}</span></p>{fields}<p class='muted'>هذه رسالة اختبار فقط. تم استخدام نفس منشئ الرسالة الذي تستخدمه الطلبات الحقيقية، مع كود ورقم طلب تجريبيين ورابط pakgat.com بدلاً من قسيمة حقيقية.</p><p class='muted' dir='ltr'>{esc(detail)}</p>{source_html}<a class='btn btn-muted' href='{esc(back_url)}'>العودة لتكامل سلة</a></section></main>"""
+    return HTMLResponse(page_shell("اختبار رسالة العميل", body, admin=True), status_code=200 if ok else 502)
 
 
 @app.post("/admin/merchant-notification-test", response_class=HTMLResponse)
@@ -2488,6 +2654,7 @@ async def salla_webhook(
         partner_name_raw = find_labeled_metadata_value(item, PARTNER_NAME_FIELD_LABELS)
         partner_hours = find_labeled_metadata_value(item, PARTNER_HOURS_FIELD_LABELS)
         partner_contact = find_labeled_metadata_value(item, PARTNER_CONTACT_FIELD_LABELS)
+        partner_address = find_labeled_metadata_value(item, PARTNER_ADDRESS_FIELD_LABELS)
         partner_map_url = find_labeled_metadata_value(item, PARTNER_MAP_FIELD_LABELS)
         metadata_source = "webhook"
         metadata_error = None
@@ -2499,6 +2666,7 @@ async def salla_webhook(
             or not partner_name_raw
             or not partner_hours
             or not partner_contact
+            or not partner_address
             or not partner_map_url
         ):
             fetched_metadata, metadata_error = fetch_salla_product_metadata(
@@ -2516,6 +2684,9 @@ async def salla_webhook(
                 )
                 partner_contact = partner_contact or find_labeled_metadata_value(
                     fetched_metadata, PARTNER_CONTACT_FIELD_LABELS
+                )
+                partner_address = partner_address or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_ADDRESS_FIELD_LABELS
                 )
                 partner_map_url = partner_map_url or find_labeled_metadata_value(
                     fetched_metadata, PARTNER_MAP_FIELD_LABELS
@@ -2608,6 +2779,7 @@ async def salla_webhook(
                     customer_partner_name or None,
                     partner_hours,
                     partner_contact,
+                    partner_address,
                     partner_map_url,
                 )
             else:
