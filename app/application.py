@@ -1,4 +1,4 @@
-# PAKGAT_BUILD: 2026-08-08-MERCHANT-REDEMPTION-v8.1-VERIFIED
+# PAKGAT_BUILD: 2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.0
 import os
 import json
 import secrets
@@ -29,7 +29,7 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-BUILD_VERSION = "2026-08-08-MERCHANT-REDEMPTION-v8.1-VERIFIED"
+BUILD_VERSION = "2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.0"
 
 
 database_url = os.environ["DATABASE_URL"]
@@ -232,6 +232,31 @@ PARTNER_NAME_FIELD_LABELS = {
     "اسم الشريك",
     "اسم التاجر",
     "partner name",
+}
+PARTNER_HOURS_FIELD_LABELS = {
+    "ساعات العمل",
+    "اوقات العمل",
+    "أوقات العمل",
+    "مواعيد العمل",
+    "working hours",
+    "business hours",
+}
+PARTNER_CONTACT_FIELD_LABELS = {
+    "رقم التواصل",
+    "رقم الاتصال",
+    "جوال التواصل",
+    "هاتف التواصل",
+    "contact number",
+    "contact phone",
+}
+PARTNER_MAP_FIELD_LABELS = {
+    "رابط خرائط Google",
+    "رابط خرائط جوجل",
+    "رابط الموقع",
+    "رابط اللوكيشن",
+    "موقع خرائط جوجل",
+    "google maps link",
+    "google map link",
 }
 MERCHANT_NOTIFICATION_PIN = (
     env("MERCHANT_NOTIFICATION_PIN")
@@ -835,6 +860,10 @@ def send_voucher_whatsapp(
     voucher_code: str,
     order_id: str,
     verification_url: str,
+    partner_name: Optional[str] = None,
+    partner_hours: Optional[str] = None,
+    partner_contact: Optional[str] = None,
+    partner_map_url: Optional[str] = None,
 ) -> None:
     phone = normalize_saudi_phone(customer_phone)
 
@@ -849,25 +878,32 @@ def send_voucher_whatsapp(
         return
 
     name = (customer_name or "عميل بكجات").strip()
+
+    partner_lines: list[str] = []
+    if partner_name and str(partner_name).strip():
+        partner_lines.append(f"مقدم الخدمة: {str(partner_name).strip()}")
+    if partner_hours and str(partner_hours).strip():
+        partner_lines.append(f"ساعات العمل: {str(partner_hours).strip()}")
+    if partner_contact and str(partner_contact).strip():
+        partner_lines.append(f"التواصل: {str(partner_contact).strip()}")
+    if partner_map_url and str(partner_map_url).strip():
+        partner_lines.append(f"الموقع: {str(partner_map_url).strip()}")
+    partner_block = ("\n".join(partner_lines) + "\n\n") if partner_lines else ""
+
     message = (
-        "✅ قسيمتك جاهزة للاستخدام\n\n"
-        f"مرحباً {name} 🎁\n\n"
-        "تم إصدار قسيمتك بنجاح.\n\n"
-        f"🎟️ العرض: {product_name}\n"
-        f"🔖 رقم القسيمة: {voucher_code}\n"
-        f"📦 رقم الطلب: {order_id}\n\n"
-        "افتح قسيمتك ورمز QR:\n"
+        "✅ قسيمتك جاهزة\n\n"
+        f"مرحباً {name}\n"
+        "تم إصدار قسيمتك بنجاح.\n"
+        "كود VIP: خصم 5% على طلبك القادم.\n\n"
+        f"العرض: {product_name}\n"
+        f"القسيمة: {voucher_code}\n"
+        f"الطلب: {order_id}\n\n"
+        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\n"
         f"{verification_url}\n\n"
-        "📲 عند استلام الخدمة، اعرض رمز QR للتاجر ليتم تأكيد الاستخدام.\n\n"
-        "🔒 لا تشارك رابط القسيمة أو رمز QR مع أي شخص، "
-        "ولا تعرضه إلا عند استلام الخدمة.\n\n"
-        "⭐ وعندنا لك شيء إضافي!\n\n"
-        "بما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا 💙\n\n"
-        "🎁 استخدم الكود VIP واحصل على خصم 5% على طلبك القادم.\n\n"
-        "يمكن عرضك القادم موجود من الآن 👀\n"
-        "https://pakgat.com\n\n"
-        "شكراً لاختيارك Pakgat\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+        + partner_block
+        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\n\n"
+        "https://pakgat.com\n"
+        "بدون قروشة.. بكجات تضبطك"
     )
 
     body = json.dumps(
@@ -915,7 +951,6 @@ def send_voucher_whatsapp(
                 voucher_id,
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
-
 
 
 def send_redemption_whatsapp(
@@ -1867,6 +1902,9 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
         # Search only read-only product-side responses for the configured labels.
         raw_phone = None
         partner_name = None
+        partner_hours = None
+        partner_contact = None
+        partner_map_url = None
         source = None
         for label, payload in (
             ("product_by_id", by_id_payload),
@@ -1881,6 +1919,12 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 source = label
             if not partner_name:
                 partner_name = find_labeled_metadata_value(payload, PARTNER_NAME_FIELD_LABELS)
+            if not partner_hours:
+                partner_hours = find_labeled_metadata_value(payload, PARTNER_HOURS_FIELD_LABELS)
+            if not partner_contact:
+                partner_contact = find_labeled_metadata_value(payload, PARTNER_CONTACT_FIELD_LABELS)
+            if not partner_map_url:
+                partner_map_url = find_labeled_metadata_value(payload, PARTNER_MAP_FIELD_LABELS)
 
         phones = merchant_phone_candidates(raw_phone)
 
@@ -1927,9 +1971,13 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
                 + identity_html
                 + "<div class='card' style='padding:20px;margin-top:14px'>"
                 f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
-                f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
+                f"<p><strong>ساعات العمل:</strong> {esc(partner_hours or 'غير موجود')}</p>"
+                f"<p><strong>رقم التواصل:</strong> <span dir='ltr'>{esc(partner_contact or 'غير موجود')}</span></p>"
+                f"<p><strong>رابط خرائط Google:</strong> <span dir='ltr'>{esc(partner_map_url or 'غير موجود')}</span></p>"
+                "<p><strong>رقم جوال استقبال القسائم:</strong></p>"
                 f"<ul>{phone_rows}</ul>"
-                "<p class='muted'>تمت قراءة اسم الشريك ورقم الاستقبال من سلة. يمكنك الآن اختبار رسالة الشريك بدون شراء أو إنشاء قسيمة.</p>"
+                f"<p><strong>مصدر القراءة:</strong> <code>{esc(source or 'unknown')}</code></p>"
+                "<p class='muted'>اختبار قراءة فقط؛ أي حقل غير موجود لن يظهر لاحقاً في رسالة العميل.</p>"
                 "<form method='post' action='/admin/merchant-notification-test' style='margin-top:14px'>"
                 f"<input type='hidden' name='product_id' value='{esc(product_id)}'>"
                 f"<input type='hidden' name='sku' value='{esc(sku)}'>"
@@ -2437,14 +2485,22 @@ async def salla_webhook(
         )
 
         merchant_phone_raw = find_labeled_metadata_value(item, MERCHANT_PHONE_FIELD_LABELS)
-        partner_name = find_labeled_metadata_value(item, PARTNER_NAME_FIELD_LABELS)
+        partner_name_raw = find_labeled_metadata_value(item, PARTNER_NAME_FIELD_LABELS)
+        partner_hours = find_labeled_metadata_value(item, PARTNER_HOURS_FIELD_LABELS)
+        partner_contact = find_labeled_metadata_value(item, PARTNER_CONTACT_FIELD_LABELS)
+        partner_map_url = find_labeled_metadata_value(item, PARTNER_MAP_FIELD_LABELS)
         metadata_source = "webhook"
         metadata_error = None
 
         # Hidden product metadata may not be embedded in Salla order webhooks.
-        # If a Merchant API token is configured, fetch the product metadata values
-        # directly using the product_id as a safe fallback.
-        if not merchant_phone_raw or not partner_name:
+        # Fetch product metadata if any routing/customer-facing partner field is missing.
+        if (
+            not merchant_phone_raw
+            or not partner_name_raw
+            or not partner_hours
+            or not partner_contact
+            or not partner_map_url
+        ):
             fetched_metadata, metadata_error = fetch_salla_product_metadata(
                 db, product_id, salla_merchant_id
             )
@@ -2452,13 +2508,23 @@ async def salla_webhook(
                 merchant_phone_raw = merchant_phone_raw or find_labeled_metadata_value(
                     fetched_metadata, MERCHANT_PHONE_FIELD_LABELS
                 )
-                partner_name = partner_name or find_labeled_metadata_value(
+                partner_name_raw = partner_name_raw or find_labeled_metadata_value(
                     fetched_metadata, PARTNER_NAME_FIELD_LABELS
+                )
+                partner_hours = partner_hours or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_HOURS_FIELD_LABELS
+                )
+                partner_contact = partner_contact or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_CONTACT_FIELD_LABELS
+                )
+                partner_map_url = partner_map_url or find_labeled_metadata_value(
+                    fetched_metadata, PARTNER_MAP_FIELD_LABELS
                 )
                 metadata_source = "salla_metadata_api"
 
         merchant_phones = merchant_phone_candidates(merchant_phone_raw)
-        partner_name = partner_name or "شريك Pakgat"
+        customer_partner_name = (partner_name_raw or "").strip()
+        partner_name = customer_partner_name or "شريك Pakgat"
 
         if merchant_phones:
             log_event(
@@ -2539,6 +2605,10 @@ async def salla_webhook(
                     voucher.code,
                     base_order_id,
                     verification_url,
+                    customer_partner_name or None,
+                    partner_hours,
+                    partner_contact,
+                    partner_map_url,
                 )
             else:
                 log_event(
