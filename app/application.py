@@ -888,21 +888,21 @@ def build_voucher_whatsapp_message(
         partner_lines.append(f"العنوان: {str(partner_address).strip()}")
     if partner_map_url and str(partner_map_url).strip():
         partner_lines.append(f"الموقع: {str(partner_map_url).strip()}")
-    partner_block = ("\\n".join(partner_lines) + "\\n\\n") if partner_lines else ""
+    partner_block = ("\n".join(partner_lines) + "\n\n") if partner_lines else ""
 
     return (
-        "✅ قسيمتك جاهزة\\n\\n"
-        f"مرحباً {name}\\n"
-        "تم إصدار قسيمتك بنجاح.\\n"
-        "كود VIP: خصم 5% على طلبك القادم.\\n\\n"
-        f"العرض: {product_name}\\n"
-        f"القسيمة: {voucher_code}\\n"
-        f"الطلب: {order_id}\\n\\n"
-        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\\n"
-        f"{verification_url}\\n\\n"
+        "✅ قسيمتك جاهزة\n\n"
+        f"مرحباً {name}\n"
+        "تم إصدار قسيمتك بنجاح.\n"
+        "كود VIP: خصم 5% على طلبك القادم.\n\n"
+        f"العرض: {product_name}\n"
+        f"القسيمة: {voucher_code}\n"
+        f"الطلب: {order_id}\n\n"
+        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\n"
+        f"{verification_url}\n\n"
         + partner_block
-        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\\n\\n"
-        "https://pakgat.com\\n"
+        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\n\n"
+        "https://pakgat.com\n"
         "بدون قروشة.. بكجات تضبطك"
     )
 
@@ -1906,7 +1906,7 @@ def admin_integrations(request: Request):
     def state(ok: bool) -> str:
         return "<span class='badge badge-active'>جاهز</span>" if ok else "<span class='badge badge-expired'>يحتاج إعداد</span>"
     webhook_url = BASE_URL + "/webhooks/salla"
-    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.updated</code> هو الحدث الرئيسي المعتمد من إعدادات التطبيق، مع دعم <code>order.payment.updated</code> إن وصل. تُصدر القسيمة عند تأكيد الدفع صراحة، أو اكتمال المبلغ المدفوع، أو وصول الطلب إلى الحالة النهائية <code>closed/completed</code> في إعداد المتجر الإلكتروني الحالي.</p><h2 style='margin-top:24px'>اختبار رقم جوال الشريك</h2><p><a class='btn btn-blue' href='/admin/merchant-test?product_id=1181243277'>اختبار قراءة المنتج 1181243277 بدون شراء</a></p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تحديث الطلب من سلة ← التحقق من الدفع الفعلي ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR مرة واحدة ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>تكامل سلة</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin-bottom:18px'><div class='card' style='padding:20px'><h3>توقيع Webhook</h3>{state(webhook_ready)}<p class='muted'>SALLA_WEBHOOK_SECRET</p></div><div class='card' style='padding:20px'><h3>منتجات القسائم</h3>{state(products_ready)}<p class='muted'>أي SKU يبدأ بـ {esc(VOUCHER_SKU_PREFIX)}</p></div><div class='card' style='padding:20px'><h3>البريد الإلكتروني</h3>{state(smtp_ready)}<p class='muted'>إرسال رابط القسيمة للعميل</p></div></div><section class='card' style='padding:22px'><h2>رابط Webhook</h2><input class='input' dir='ltr' readonly onclick='this.select()' value='{esc(webhook_url)}'><h2 style='margin-top:24px'>الحدث التشغيلي</h2><p><code>order.updated</code> هو الحدث الرئيسي المعتمد من إعدادات التطبيق، مع دعم <code>order.payment.updated</code> إن وصل. تُصدر القسيمة عند تأكيد الدفع صراحة، أو اكتمال المبلغ المدفوع، أو وصول الطلب إلى الحالة النهائية <code>closed/completed</code> في إعداد المتجر الإلكتروني الحالي.</p><h2 style='margin-top:24px'>تشخيص بيانات الشريك</h2><p><a class='btn btn-blue' href='/admin/merchant-test'>فتح تشخيص المنتج بدون شراء</a></p><h2 style='margin-top:24px'>المسار التشغيلي</h2><p>تحديث الطلب من سلة ← التحقق من الدفع الفعلي ← مطابقة SKU يبدأ بـ PKG-QR ← إنشاء القسيمة وQR مرة واحدة ← ظهورها في لوحة الإدارة وإرسال رابطها بالبريد عند اكتمال SMTP.</p></section></main>"""
     return HTMLResponse(page_shell("تكامل سلة", body, admin=True))
 
 
@@ -2058,11 +2058,12 @@ def admin_merchant_metadata_test(request: Request, product_id: str = "", sku: st
     <section class='card' style='max-width:920px;margin:auto;padding:24px'>
       <h1>تشخيص بيانات الشريك من سلة</h1>
       <p class='muted'>بدون شراء، بدون إنشاء قسيمة، وبدون إرسال واتساب. يستخدم Product Details الرسمي من Salla ويقارن القراءة بالـSKU والـProduct ID.</p>
+      <p class='muted'>نصيحة: عند استخدام Product ID اترك SKU فارغاً حتى لا تختلط بيانات منتجين مختلفين.</p>
       <form method='get' action='/admin/merchant-test'>
         <label>رقم المنتج في سلة (Product ID)</label>
-        <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='1181243277'>
+        <input class='input' name='product_id' dir='ltr' value='{esc(product_id)}' placeholder='مثال: 869677016'>
         <label style='display:block;margin-top:12px'>SKU</label>
-        <input class='input' name='sku' dir='ltr' value='{esc(sku or 'PKG-QR-00012')}' placeholder='PKG-QR-00012'>
+        <input class='input' name='sku' dir='ltr' value='{esc(sku)}' placeholder='اختياري — اتركه فارغاً عند التشخيص بالـ Product ID'>
         <button class='btn btn-blue' style='margin-top:14px' type='submit'>تشخيص المنتج</button>
       </form>
       <div style='margin-top:20px'>{result_box}</div>
@@ -2174,7 +2175,7 @@ async def admin_customer_voucher_notification_test(request: Request, db: Session
         "<div class='alert alert-error'><strong>فشل إرسال رسالة اختبار العميل.</strong></div>"
     )
     fields = (
-        f"<p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
+        f"<p><strong>Product ID المستخدم:</strong> <span dir='ltr'>{esc(product_id)}</span></p><p><strong>SKU المستخدم:</strong> <span dir='ltr'>{esc(sku or 'فارغ')}</span></p><p><strong>اسم الشريك:</strong> {esc(partner_name or 'غير موجود')}</p>"
         f"<p><strong>ساعات العمل:</strong> {esc(partner_hours or 'غير موجود')}</p>"
         f"<p><strong>رقم التواصل:</strong> <span dir='ltr'>{esc(partner_contact or 'غير موجود')}</span></p>"
         f"<p><strong>العنوان:</strong> {esc(partner_address or 'غير موجود')}</p>"
