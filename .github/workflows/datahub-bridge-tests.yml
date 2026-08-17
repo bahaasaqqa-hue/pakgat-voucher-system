@@ -1,0 +1,21 @@
+name: Pakgat AI Data Hub Bridge Tests
+
+on:
+  pull_request:
+    paths:
+      - 'app/datahub.py'
+      - 'main.py'
+      - 'tests/test_datahub_bridge.py'
+      - '.github/workflows/datahub-bridge-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run bridge unit tests
+        run: python -m unittest tests/test_datahub_bridge.py
