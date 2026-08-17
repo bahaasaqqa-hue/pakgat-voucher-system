@@ -11,6 +11,7 @@
 - Added administration security readiness check for `ADMIN_PASSWORD` and `ADMIN_SECRET`.
 - Automatic audit entry when a voucher is created.
 - Render-compatible `main.py` entry point retained.
+- Optional Pakgat AI Data Hub bridge: voucher, WhatsLoop, merchant-notification, redemption, failure, and audit lifecycle events are forwarded asynchronously without blocking the production voucher flow.
 
 ## Required Render variables
 
@@ -23,6 +24,16 @@
 - `SALLA_WEBHOOK_SECRET`
 - `VOUCHER_PRODUCT_IDS`
 - `DEFAULT_VALIDITY_DAYS=7`
+
+## Pakgat AI Data Hub integration
+
+Add these only after the Data Hub service is deployed:
+
+- `PAKGAT_AI_DATA_HUB_URL=https://<pakgat-ai-data-hub-service>`
+- `PAKGAT_AI_INGEST_TOKEN=<same secret configured on the Data Hub>`
+- `PAKGAT_AI_DATA_HUB_TIMEOUT=3` (optional)
+
+The bridge is intentionally fail-open. If the Data Hub is down or these variables are absent, voucher creation, redemption, Salla processing, and WhatsLoop delivery continue normally. The production voucher database remains the source of truth.
 
 Optional email variables:
 
