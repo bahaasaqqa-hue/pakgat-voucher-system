@@ -8,5 +8,6 @@ from app import ai_company_sources as _ai_company_sources  # noqa: F401 - source
 from app import ai_company_dispatch as _ai_company_dispatch  # noqa: F401 - manual opportunity assignment + WhatsLoop dispatch
 from app import ai_company_ar as _ai_company_ar  # noqa: F401 - Arabic UI + AI Company admin navigation
 from app import ai_company_opportunity_compact as _ai_company_opportunity_compact  # noqa: F401 - focused radar + compact unified opportunity UX
+from app import ai_company_compact_fix as _ai_company_compact_fix  # noqa: F401 - preserve all dashboard sections
 
 __all__ = ["app"]
