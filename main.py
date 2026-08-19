@@ -16,5 +16,6 @@ from app import ai_company_governance as _ai_company_governance  # noqa: F401 - 
 from app import ai_company_hunter as _ai_company_hunter  # noqa: F401 - merchant/supplier acquisition pipeline
 from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - store operations quality watch
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
+from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
 
 __all__ = ["app"]
