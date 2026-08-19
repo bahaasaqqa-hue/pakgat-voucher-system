@@ -37,7 +37,7 @@ if _route is not None:
         companies = int(db.scalar(select(func.count(CorporateCompany.id)).where(CorporateCompany.status == "active")) or 0)
         active_members = int(db.scalar(select(func.count(CorporateMember.id)).where(CorporateMember.status == "active")) or 0)
         pending = int(db.scalar(select(func.count(CorporateMember.id)).where(CorporateMember.status == "verified_pending_sync")) or 0)
-        status = "جاهز" if ready["salla_oauth"] and ready["smtp"] and companies else "قيد التجهيز"
+        status = "جاهز للربط" if ready["salla_oauth"] and companies else "قيد التجهيز"
         section = f"""
         <section class='ai-panel'>
           <div class='ai-panel-head'><h2>الشركات والموظفون</h2><a class='ai-link' href='/admin/company/corporate'>فتح النظام</a></div>
@@ -45,7 +45,7 @@ if _route is not None:
           <div class='ai-stat-row'><span>شركات مفعلة</span><strong class='ai-number'>{companies}</strong></div>
           <div class='ai-stat-row'><span>موظفون نشطون</span><strong class='ai-number'>{active_members}</strong></div>
           <div class='ai-stat-row'><span>بانتظار مزامنة سلة</span><strong class='ai-number'>{pending}</strong></div>
-          <div class='ai-note'>الجوال → البريد الوظيفي → OTP → مجموعة العميل في سلة</div>
+          <div class='ai-note'>سلة: تسجيل الدخول + OTP الجوال + OTP البريد · Google: نطاق الشركة + العضوية + مجموعة العميل</div>
         </section>
         """
         html = response.body.decode("utf-8", errors="replace")
