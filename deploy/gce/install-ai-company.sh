@@ -14,7 +14,7 @@ sudo -u pakgat git -C "$APP_DIR" pull --ff-only origin gce-migration
 
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.service" /etc/systemd/system/pakgat-ai-monitor.service
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.timer" /etc/systemd/system/pakgat-ai-monitor.timer
-install -m 0750 "$APP_DIR/deploy/gce/pakgat-db-backup.sh" "$APP_DIR/deploy/gce/pakgat-db-backup.sh"
+chmod 0750 "$APP_DIR/deploy/gce/pakgat-db-backup.sh"
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-db-backup.service" /etc/systemd/system/pakgat-db-backup.service
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-db-backup.timer" /etc/systemd/system/pakgat-db-backup.timer
 
@@ -23,7 +23,6 @@ systemctl restart pakgat-voucher
 systemctl enable --now pakgat-ai-monitor.timer
 systemctl enable --now pakgat-db-backup.timer
 
-# Allow the application a little time to import all AI Company modules and create tables.
 for _ in $(seq 1 15); do
   if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
     break
