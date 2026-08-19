@@ -2,7 +2,7 @@
 
 Final activation model:
 - Salla owns customer login/mobile OTP and email OTP in the storefront/theme.
-- Google/Pakgat receives customer.updated, resolves the verified profile email,
+- Google/Pakgat receives customer.updated, resolves the Salla profile email,
   maps the email domain to a corporate company, and syncs the customer into the
   company's Salla Customer Group.
 
@@ -17,11 +17,13 @@ import json
 from datetime import timedelta
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import select
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.routing import APIRoute
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import application as core
+from app import corporate_benefits as corporate_base
 from app.corporate_benefits import (
     CORPORATE_LIVE,
     CorporateCompany,
@@ -31,6 +33,7 @@ from app.corporate_benefits import (
     _audit,
     _email_domain,
     _now,
+    _salla_access_token,
     _salla_request,
     salla_add_customer_to_group,
     salla_create_company_group,
@@ -38,6 +41,7 @@ from app.corporate_benefits import (
 
 
 CORPORATE_SALLA_PROFILE_MODE = core.env("CORPORATE_SALLA_PROFILE_MODE", "true").lower() == "true"
+CORPORATE_STOREFRONT_ACTIVATION_URL = core.env("CORPORATE_STOREFRONT_ACTIVATION_URL", "https://pakgat.com").strip()
 
 
 def _valid_salla_signature(body: bytes, provided: str) -> bool:
@@ -97,8 +101,8 @@ def _upsert_member_from_salla(db: Session, customer: dict) -> tuple[str, Corpora
     if not company or company.status != "active":
         return "company_inactive", None, None
 
-    # One active corporate employer at a time locally. We do not remove Salla
-    # groups automatically here; that is a separate controlled offboarding task.
+    # Keep one active employer locally. Removing a previous Salla group is a
+    # separate controlled offboarding action and is not performed here.
     old_rows = list(
         db.scalars(
             select(CorporateMember).where(
@@ -254,8 +258,8 @@ async def corporate_salla_webhook(request: Request, db: Session = Depends(core.g
         raise HTTPException(status_code=400, detail="Invalid JSON") from exc
 
     result = process_customer_updated(db, payload)
-    # Webhooks should acknowledge accepted events even if downstream Salla sync
-    # must retry later; the local member state retains the failure safely.
+    # Acknowledge accepted events even if group sync must retry later; local
+    # membership state retains the failure safely.
     return JSONResponse(result, status_code=200)
 
 
@@ -283,3 +287,59 @@ def corporate_sync_pending(request: Request, db: Session = Depends(core.get_db))
 
     _audit(db, "corporate_pending_sync_run", details=f"candidates={len(rows)}; synced={synced}")
     return RedirectResponse(f"/admin/company/corporate?sync_pending={len(rows)}&sync_ok={synced}", status_code=303)
+
+
+def salla_managed_readiness(db: Session) -> dict:
+    companies = int(db.scalar(select(func.count(CorporateCompany.id)).where(CorporateCompany.status == "active")) or 0)
+    groups = int(
+        db.scalar(
+            select(func.count(CorporateCompany.id)).where(
+                CorporateCompany.status == "active",
+                CorporateCompany.salla_group_id.is_not(None),
+            )
+        )
+        or 0
+    )
+    return {
+        "live": CORPORATE_LIVE,
+        "salla_oauth": bool(_salla_access_token(db)),
+        "salla_profile_mode": CORPORATE_SALLA_PROFILE_MODE,
+        "verification_provider": "Salla",
+        "companies": companies,
+        "companies_with_group": groups,
+        "webhook_path": "/webhooks/salla-corporate",
+        "public_url": CORPORATE_STOREFRONT_ACTIVATION_URL,
+        # Compatibility key for the legacy admin template. SMTP is deliberately
+        # not a production requirement in the approved Salla-managed flow.
+        "smtp": True,
+    }
+
+
+# Make all existing Corporate admin/readiness callers use the final Salla-owned
+# verification architecture without rewriting the older database/admin module.
+corporate_base.corporate_readiness = salla_managed_readiness
+
+
+def _legacy_public_home():
+    html = f"""<!doctype html><html lang='ar' dir='rtl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>مزايا الشركات | بكجات</title></head><body style='font-family:Arial,Tahoma,sans-serif;background:#f4f8ff;color:#10233f'><main style='width:min(680px,calc(100% - 28px));margin:40px auto'><section style='background:#fff;border:1px solid #dce6f7;border-radius:18px;padding:28px'><h1 style='color:#0d47d9'>فعّل مزايا شركتك</h1><p>التفعيل يتم من داخل متجر بكجات باستخدام حساب سلة. سلة تتولى تسجيل الدخول والتحقق من الجوال والبريد الوظيفي.</p><a href='{core.esc(CORPORATE_STOREFRONT_ACTIVATION_URL)}' style='display:inline-block;background:#0d47d9;color:#fff;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:800'>الذهاب إلى بكجات</a></section></main></body></html>"""
+    return HTMLResponse(html)
+
+
+async def _legacy_public_post(request: Request, db: Session = Depends(core.get_db)):
+    return RedirectResponse(CORPORATE_STOREFRONT_ACTIVATION_URL, status_code=303)
+
+
+def _disable_legacy_google_otp_routes() -> None:
+    """Prevent the obsolete Google/SMTP OTP flow from being enabled accidentally."""
+    for route in core.app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if route.path == "/corporate" and "GET" in route.methods:
+            route.endpoint = _legacy_public_home
+            route.dependant.call = _legacy_public_home
+        elif route.path in {"/corporate/start", "/corporate/request-otp", "/corporate/verify"} and "POST" in route.methods:
+            route.endpoint = _legacy_public_post
+            route.dependant.call = _legacy_public_post
+
+
+_disable_legacy_google_otp_routes()
