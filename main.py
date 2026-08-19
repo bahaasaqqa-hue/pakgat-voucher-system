@@ -21,6 +21,7 @@ from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corpor
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
 from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - approved Pakgat AI visual/control experience
+from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company, import LAST
 
 __all__ = ["app"]
