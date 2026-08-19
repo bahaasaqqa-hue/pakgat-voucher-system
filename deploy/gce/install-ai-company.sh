@@ -13,8 +13,11 @@ sudo -u pakgat git -C "$APP_DIR" checkout gce-migration
 sudo -u pakgat git -C "$APP_DIR" pull --ff-only origin gce-migration
 
 # Safety gate: do not restart the live voucher service if a newly added AI
-# Company module has a Python syntax error.
-sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile "$APP_DIR/main.py" "$APP_DIR"/app/ai_company*.py
+# Company or Corporate Benefits module has a Python syntax error.
+sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
+  "$APP_DIR/main.py" \
+  "$APP_DIR"/app/ai_company*.py \
+  "$APP_DIR"/app/corporate*.py
 
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.service" /etc/systemd/system/pakgat-ai-monitor.service
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.timer" /etc/systemd/system/pakgat-ai-monitor.timer
@@ -41,7 +44,8 @@ systemctl --no-pager --full status pakgat-ai-monitor.timer | sed -n '1,10p'
 systemctl --no-pager --full status pakgat-db-backup.timer | sed -n '1,10p'
 
 echo
-printf '%s\n' 'Pakgat AI Company GCE installation completed.'
+printf '%s\n' 'Pakgat AI Company + Corporate Benefits GCE installation completed.'
 printf '%s\n' 'Dashboard: https://voucher.pakgat.com/admin/company'
-printf '%s\n' 'Systems: https://voucher.pakgat.com/admin/company/systems'
+printf '%s\n' 'Corporate Admin: https://voucher.pakgat.com/admin/company/corporate'
+printf '%s\n' 'Corporate Public: https://voucher.pakgat.com/corporate (staging path until benefits.pakgat.com DNS/TLS is enabled)'
 printf '%s\n' 'Health: https://voucher.pakgat.com/company/health'
