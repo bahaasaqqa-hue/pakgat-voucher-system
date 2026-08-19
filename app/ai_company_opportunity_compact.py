@@ -1,15 +1,15 @@
 """Compact opportunity UX for the Pakgat AI Company Control Center.
 
-Dashboard rule: show only the newest four NEW opportunities as a flash view.
-All opportunity history, assignment, execution stages and archive live on one
-secondary page so the CEO dashboard stays compact.
+Dashboard rule: opportunities do not render as cards/tables on the CEO dashboard.
+The existing KPI tile becomes one clickable "latest opportunities" tile with a
+new-opportunity indicator. All opportunity details, assignment, execution stages
+and archive live on the dedicated secondary page.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from urllib.parse import parse_qs
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -57,11 +57,6 @@ def _find_route(path: str, method: str = "GET"):
     return None
 
 
-def _short(text: str, limit: int = 180) -> str:
-    clean = " ".join(str(text or "").split())
-    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "…"
-
-
 def _source_badge(source: str) -> str:
     label = source
     if source.startswith("كوبون"):
@@ -73,17 +68,9 @@ def _source_badge(source: str) -> str:
     return f"<span class='badge badge-active'>{core.esc(label)}</span>"
 
 
-def _compact_dashboard_section(db: Session) -> str:
+def _new_count(db: Session) -> int:
     sync_focused_feed(db)
-    latest = list(
-        db.scalars(
-            select(ai_company.CompanyOpportunity)
-            .where(ai_company.CompanyOpportunity.status == "new")
-            .order_by(ai_company.CompanyOpportunity.created_at.desc(), ai_company.CompanyOpportunity.id.desc())
-            .limit(4)
-        ).all()
-    )
-    new_count = int(
+    return int(
         db.scalar(
             select(func.count(ai_company.CompanyOpportunity.id)).where(
                 ai_company.CompanyOpportunity.status == "new"
@@ -92,59 +79,76 @@ def _compact_dashboard_section(db: Session) -> str:
         or 0
     )
 
-    cards = "".join(
-        f"""
-        <article style='border:1px solid #e1e8f5;border-radius:14px;padding:15px;background:#f8faff'>
-          <div style='display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap'>
-            <div>{_source_badge(o.source)} <strong style='margin-inline-start:6px'>{core.esc(o.priority)}</strong></div>
-            <div style='font-weight:900'>{core.esc(f'{o.score:.0f}' if o.score is not None else '—')}</div>
-          </div>
-          <h3 style='margin:10px 0 6px;font-size:18px'>{core.esc(o.title)}</h3>
-          <p class='muted' style='margin:0 0 12px;line-height:1.7'>{core.esc(_short(o.details or ''))}</p>
-          <a class='btn btn-blue' href='/admin/company/opportunities/{o.id}/assign'>فتح وإسناد</a>
-        </article>
-        """
-        for o in latest
-    )
-    if not cards:
-        cards = "<div class='muted' style='padding:12px 0'>لا توجد فرص جديدة الآن.</div>"
 
-    return f"""
-    <section class='card' style='padding:22px;margin-bottom:18px'>
-      <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
-        <div>
-          <h2 style='margin-bottom:4px'>أحدث الفرص</h2>
-          <p class='muted' style='margin:0'>يعرض آخر 4 فرص جديدة فقط · كوبون · نون · أمازون</p>
-        </div>
-        <div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'>
-          <span class='badge badge-active'>{new_count} جديدة</span>
-          <a class='btn btn-blue' href='/admin/company/opportunities'>كل الفرص والإسناد</a>
-        </div>
-      </div>
-      <div class='grid grid-mobile-1' style='grid-template-columns:repeat(2,1fr);margin-top:16px'>{cards}</div>
-    </section>
+def _remove_section_containing(html: str, marker: str) -> str:
+    """Remove only the single <section> that contains marker.
+
+    This avoids the broad regex that previously swallowed unrelated dashboard
+    sections below the opportunities area.
     """
+    marker_pos = html.find(marker)
+    if marker_pos < 0:
+        return html
+    start = html.rfind("<section", 0, marker_pos)
+    if start < 0:
+        return html
+    end = html.find("</section>", marker_pos)
+    if end < 0:
+        return html
+    end += len("</section>")
+    return html[:start] + html[end:]
 
 
-def _replace_dashboard_opportunity_sections(html: str, section: str) -> str:
-    # Replace the original large opportunities table.
-    original_pattern = re.compile(
-        r"<section class='card' style='padding:22px;margin-bottom:18px'>.*?"
-        r"الفرص الجديدة لـ Pakgat.*?</section>",
+def _replace_opportunity_kpi(html: str, new_count: int) -> str:
+    """Turn the existing Opportunities KPI into the only dashboard entry point."""
+    badge = (
+        f"<span style='position:absolute;top:12px;left:12px;background:#dc2626;color:#fff;"
+        f"border-radius:999px;padding:4px 9px;font-size:12px;font-weight:900'>{new_count} جديدة</span>"
+        if new_count
+        else "<span style='position:absolute;top:12px;left:12px;background:#e8eefc;color:#64748b;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:900'>لا جديد</span>"
+    )
+    tile = (
+        "<a href='/admin/company/opportunities' class='card' "
+        "style='padding:20px;display:block;position:relative;min-height:140px'>"
+        f"{badge}"
+        "<div class='muted' style='margin-top:6px'>أحدث الفرص</div>"
+        f"<div style='font-size:34px;font-weight:900;margin-top:12px'>{new_count}</div>"
+        "<div class='muted' style='font-size:13px;margin-top:4px'>اضغط لعرض الفرص والإسناد</div>"
+        "</a>"
+    )
+
+    pattern = re.compile(
+        r"<section class='card' style='padding:20px'>"
+        r"<div class='muted'>Opportunities</div>"
+        r"<div style='font-size:34px;font-weight:900'>.*?</div>"
+        r"</section>",
         re.DOTALL,
     )
-    html, count = original_pattern.subn(section, html, count=1)
-    if count == 0:
-        html = html.replace("</main>", section + "</main>", 1)
+    html, replaced = pattern.subn(tile, html, count=1)
+    if replaced:
+        return html
 
-    # Remove the second, separate dispatch box. Assignment is now part of the
-    # unified opportunities page reached from the compact flash section.
-    dispatch_pattern = re.compile(
-        r"<section class='card' style='padding:22px;margin-bottom:18px'>.*?"
-        r"Opportunity Dispatch · المندوبون.*?</section>",
+    # Fallback for an already-localized render.
+    pattern_ar = re.compile(
+        r"<section class='card' style='padding:20px'>"
+        r"<div class='muted'>الفرص</div>"
+        r"<div style='font-size:34px;font-weight:900'>.*?</div>"
+        r"</section>",
         re.DOTALL,
     )
-    html = dispatch_pattern.sub("", html, count=1)
+    return pattern_ar.sub(tile, html, count=1)
+
+
+def _compact_dashboard_html(html: str, db: Session) -> str:
+    count = _new_count(db)
+    html = _replace_opportunity_kpi(html, count)
+
+    # The CEO dashboard must not contain opportunity details. Remove the old
+    # large opportunities section and the separate dispatch section completely.
+    html = _remove_section_containing(html, "الفرص الجديدة لـ Pakgat")
+    html = _remove_section_containing(html, "Opportunity Dispatch · المندوبون")
+    html = _remove_section_containing(html, "إسناد الفرص · المندوبون")
+    html = _remove_section_containing(html, "أحدث الفرص") if "grid-template-columns:repeat(2,1fr)" in html and "فتح وإسناد" in html else html
     return html
 
 
@@ -285,9 +289,8 @@ if _dashboard_route is not None:
         response = _original_dashboard(request, db)
         if not isinstance(response, HTMLResponse):
             return response
-        section = _compact_dashboard_section(db)
         html = response.body.decode("utf-8", errors="replace")
-        html = _replace_dashboard_opportunity_sections(html, section)
+        html = _compact_dashboard_html(html, db)
         response.body = html.encode("utf-8")
         response.headers["content-length"] = str(len(response.body))
         return response
