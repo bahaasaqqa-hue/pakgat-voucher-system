@@ -128,7 +128,6 @@ def _replace_opportunity_kpi(html: str, new_count: int) -> str:
     if replaced:
         return html
 
-    # Fallback for an already-localized render.
     pattern_ar = re.compile(
         r"<section class='card' style='padding:20px'>"
         r"<div class='muted'>الفرص</div>"
@@ -142,13 +141,9 @@ def _replace_opportunity_kpi(html: str, new_count: int) -> str:
 def _compact_dashboard_html(html: str, db: Session) -> str:
     count = _new_count(db)
     html = _replace_opportunity_kpi(html, count)
-
-    # The CEO dashboard must not contain opportunity details. Remove the old
-    # large opportunities section and the separate dispatch section completely.
     html = _remove_section_containing(html, "الفرص الجديدة لـ Pakgat")
     html = _remove_section_containing(html, "Opportunity Dispatch · المندوبون")
     html = _remove_section_containing(html, "إسناد الفرص · المندوبون")
-    html = _remove_section_containing(html, "أحدث الفرص") if "grid-template-columns:repeat(2,1fr)" in html and "فتح وإسناد" in html else html
     return html
 
 
@@ -280,7 +275,6 @@ def archive_opportunity(opportunity_id: int, request: Request, db: Session = Dep
     return RedirectResponse("/admin/company/opportunities", status_code=303)
 
 
-# Dashboard final wrapper: imported after all other dashboard extensions.
 _dashboard_route = _find_route("/admin/company", "GET")
 if _dashboard_route is not None:
     _original_dashboard = _dashboard_route.dependant.call
@@ -299,8 +293,6 @@ if _dashboard_route is not None:
     _dashboard_route.dependant.call = _compact_dashboard
 
 
-# Replace the old separate assignment list with the unified page while keeping
-# the existing assignment/send and stage POST endpoints intact.
 _opportunities_route = _find_route("/admin/company/opportunities", "GET")
 if _opportunities_route is not None:
     _opportunities_route.endpoint = opportunities_unified_page
