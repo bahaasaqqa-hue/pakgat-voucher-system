@@ -9,5 +9,8 @@ from app import ai_company_dispatch as _ai_company_dispatch  # noqa: F401 - manu
 from app import ai_company_ar as _ai_company_ar  # noqa: F401 - Arabic UI + AI Company admin navigation
 from app import ai_company_opportunity_compact as _ai_company_opportunity_compact  # noqa: F401 - focused radar + compact unified opportunity UX
 from app import ai_company_compact_fix as _ai_company_compact_fix  # noqa: F401 - preserve all dashboard sections
+from app import ai_company_evidence as _ai_company_evidence  # noqa: F401 - source links/images for opportunities
+from app import ai_company_evidence_ui as _ai_company_evidence_ui  # noqa: F401 - show source evidence and enrich dispatch
+from app import ai_company_competitor_watchlist as _ai_company_competitor_watchlist  # noqa: F401 - competitor/product radar sources
 
 __all__ = ["app"]
