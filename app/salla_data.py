@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, Depends, Request
 from fastapi.routing import APIRoute
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, delete, func, or_, select
+from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, and_, delete, func, or_, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
@@ -229,7 +229,10 @@ def salla_metrics(db: Session) -> dict:
     confirmed_condition = or_(
         SallaOrderSnapshot.payment_status.in_(paid_statuses),
         SallaOrderSnapshot.order_status.in_(final_statuses),
-        SallaOrderSnapshot.paid_amount >= SallaOrderSnapshot.total_amount,
+        and_(
+            SallaOrderSnapshot.total_amount > 0,
+            SallaOrderSnapshot.paid_amount >= SallaOrderSnapshot.total_amount,
+        ),
     )
 
     orders_total = int(db.scalar(select(func.count(SallaOrderSnapshot.id))) or 0)
