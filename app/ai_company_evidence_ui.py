@@ -1,7 +1,7 @@
 """Opportunity evidence UI and WhatsApp message enrichment.
 
 Adds source links (and images when a scanner provides one) without changing the
-core opportunity table.  The CEO/agent can reach the original offer/product
+core opportunity table. The CEO/agent can reach the original offer/product
 before acting on a recommendation.
 """
 
@@ -91,49 +91,6 @@ def _compact_dashboard_section(db: Session) -> str:
     """
 
 
-def _opportunity_rows(rows, allow_assign: bool, archive_button: bool = True) -> str:
-    rendered = []
-    for o in rows:
-        action = ""
-        if allow_assign:
-            action += f"<a class='btn btn-blue' href='/admin/company/opportunities/{o.id}/assign'>إسناد</a> "
-        if o.status in compact.EXECUTION_STATUSES:
-            action += f"""
-            <form method='post' action='/admin/company/opportunities/{o.id}/stage' style='display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap'>
-              <select class='select' name='stage' style='width:auto;padding:8px 10px'>
-                <option value='contacted'>تم التواصل</option><option value='replied'>تم الرد</option>
-                <option value='negotiating'>قيد التفاوض</option><option value='won'>ناجحة</option><option value='lost'>غير ناجحة</option>
-              </select><button class='btn btn-muted' type='submit'>تحديث</button>
-            </form> """
-        if archive_button and o.status not in compact.ARCHIVE_STATUSES:
-            action += f"""<form method='post' action='/admin/company/opportunities/{o.id}/archive' style='display:inline'>
-              <button class='btn btn-muted' type='submit' onclick="return confirm('أرشفة هذه الفرصة؟');">أرشفة</button></form>"""
-        source_links = _source_block(core.SessionLocal() if False else db_placeholder, o.id)  # replaced below
-        rendered.append((o, action))
-
-    # Build with one DB session for evidence lookup. This function is called from
-    # an active request context but does not receive db, so use a short local session.
-    html_rows = []
-    with core.SessionLocal() as evidence_db:
-        for o, action in rendered:
-            source_links = _source_block(evidence_db, o.id)
-            html_rows.append(
-                "<tr>"
-                f"<td>OP-{o.id:04d}</td><td>{core.esc(o.priority)}</td><td>{compact._source_badge(o.source)}</td>"
-                f"<td><strong>{core.esc(o.title)}</strong>{source_links}"
-                f"<details style='margin-top:7px'><summary class='muted' style='cursor:pointer'>عرض التفاصيل</summary>"
-                f"<div style='margin-top:7px;line-height:1.7'>{core.esc(o.details or '—')}</div></details></td>"
-                f"<td>{core.esc(f'{o.score:.0f}' if o.score is not None else '—')}</td>"
-                f"<td>{core.esc(compact.STATUS_AR.get(o.status, o.status))}</td><td>{action or '—'}</td></tr>"
-            )
-    return "".join(html_rows)
-
-
-# Replace compact generators. The route wrappers already installed by the compact
-# module resolve these names from its module globals at request time.
-compact._compact_dashboard_section = _compact_dashboard_section
-
-# Rebuild row helper without changing the route itself.
 def _rows_with_links(rows, allow_assign: bool, archive_button: bool = True) -> str:
     rendered = []
     with core.SessionLocal() as evidence_db:
@@ -155,12 +112,9 @@ def _rows_with_links(rows, allow_assign: bool, archive_button: bool = True) -> s
             )
     return "".join(rendered)
 
+
+compact._compact_dashboard_section = _compact_dashboard_section
 compact._opportunity_rows = _rows_with_links
-
-
-# Enrich the editable WhatsApp draft with the original source URL and tailor the
-# action text to the kind of opportunity.
-_original_default_message = dispatch._default_message
 
 
 def _default_message_with_source(opportunity: ai_company.CompanyOpportunity) -> str:
@@ -168,9 +122,7 @@ def _default_message_with_source(opportunity: ai_company.CompanyOpportunity) -> 
     details = (opportunity.details or "لا توجد تفاصيل إضافية.").strip()
     with core.SessionLocal() as db:
         evidence = primary_evidence(db, opportunity.id)
-    source_line = ""
-    if evidence:
-        source_line = f"\nرابط المصدر: {evidence.source_url}\n"
+    source_line = f"\nرابط المصدر: {evidence.source_url}\n" if evidence else ""
     if opportunity.source.startswith(("نون", "أمازون")):
         action = (
             "المطلوب: افتح الرابط وتحقق من السعر والتوفر وإشارة الطلب الحالية. "
@@ -188,11 +140,10 @@ def _default_message_with_source(opportunity: ai_company.CompanyOpportunity) -> 
         f"الفرصة: {opportunity.title}\nتقييم الفرصة: {score}\n{source_line}\nالتفاصيل:\n{details}\n\n{action}\n\nشركة بكجات الذكية"
     )
 
+
 dispatch._default_message = _default_message_with_source
 
 
-# Inject evidence into the assignment page itself so the CEO or agent can open
-# the source before confirming WhatsApp dispatch.
 _assign_route = None
 for route in core.app.routes:
     if isinstance(route, APIRoute) and route.path == "/admin/company/opportunities/{opportunity_id}/assign" and "GET" in route.methods:
