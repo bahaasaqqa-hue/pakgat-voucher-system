@@ -17,5 +17,6 @@ from app import ai_company_hunter as _ai_company_hunter  # noqa: F401 - merchant
 from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - store operations quality watch
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
 from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
+from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - approved Pakgat AI visual/control experience, import LAST
 
 __all__ = ["app"]
