@@ -17,9 +17,8 @@ from app.ai_company_governance import ensure_approval
 
 class CompanyLead(core.Base):
     __tablename__ = "company_leads"
-
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    lead_type: Mapped[str] = mapped_column(String(20), index=True)  # merchant | supplier
+    lead_type: Mapped[str] = mapped_column(String(20), index=True)
     source: Mapped[str] = mapped_column(String(120), default="manual", index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
@@ -36,14 +35,9 @@ class CompanyLead(core.Base):
 
 PIPELINE = ["new", "qualified", "contact_ready", "contacted", "replied", "negotiating", "live", "rejected"]
 STATUS_AR = {
-    "new": "جديد",
-    "qualified": "مؤهل",
-    "contact_ready": "جاهز للتواصل",
-    "contacted": "تم التواصل",
-    "replied": "تم الرد",
-    "negotiating": "قيد التفاوض",
-    "live": "تم التفعيل",
-    "rejected": "مرفوض",
+    "new": "جديد", "qualified": "مؤهل", "contact_ready": "جاهز للتواصل",
+    "contacted": "تم التواصل", "replied": "تم الرد", "negotiating": "قيد التفاوض",
+    "live": "تم التفعيل", "rejected": "مرفوض",
 }
 
 
@@ -57,6 +51,12 @@ def _admin_redirect(request: Request):
 
 def _form_value(form: dict, key: str, default: str = "") -> str:
     return str((form.get(key) or [default])[0]).strip()
+
+
+def _source_link(row: CompanyLead) -> str:
+    if not row.url:
+        return "—"
+    return f"<a class='btn btn-muted' target='_blank' rel='noopener' href='{core.esc(row.url)}'>فتح المصدر</a>"
 
 
 def ensure_lead_from_opportunity(db: Session, opportunity: ai_company.CompanyOpportunity, lead_type: str = "merchant") -> CompanyLead:
@@ -93,8 +93,7 @@ def hunter_page(request: Request, db: Session = Depends(core.get_db)):
         f"<td>{core.esc(r.category or '—')}</td><td>{core.esc(r.city or '—')}</td>"
         f"<td>{core.esc(f'{r.score:.0f}' if r.score is not None else '—')}</td>"
         f"<td>{core.esc(STATUS_AR.get(r.status, r.status))}</td>"
-        f"<td>{(f'<a class=\"btn btn-muted\" target=\"_blank\" rel=\"noopener\" href=\"{core.esc(r.url)}\">فتح المصدر</a>' if r.url else '—')}</td>"
-        f"<td><a class='btn btn-blue' href='/admin/company/hunter/{r.id}'>فتح</a></td></tr>"
+        f"<td>{_source_link(r)}</td><td><a class='btn btn-blue' href='/admin/company/hunter/{r.id}'>فتح</a></td></tr>"
         for r in rows
     ) or "<tr><td colspan='8' class='muted'>لا توجد Leads بعد.</td></tr>"
     body = f"""
@@ -110,8 +109,7 @@ def hunter_page(request: Request, db: Session = Depends(core.get_db)):
         <section class='card' style='padding:16px'><div class='muted'>تم التفعيل</div><strong style='font-size:28px'>{counts['live']}</strong></section>
       </div>
       <section class='card' style='padding:22px;margin-bottom:18px'>
-        <h2>إضافة Lead</h2>
-        <form method='post' action='/admin/company/hunter'>
+        <h2>إضافة Lead</h2><form method='post' action='/admin/company/hunter'>
           <div class='grid grid-mobile-1' style='grid-template-columns:repeat(2,1fr)'>
             <div><label>النوع</label><select class='select' name='lead_type'><option value='merchant'>تاجر / شريك كوبون</option><option value='supplier'>مورد منتج</option></select></div>
             <div><label>الاسم</label><input class='input' name='name' required></div>
@@ -141,8 +139,7 @@ async def hunter_add(request: Request, db: Session = Depends(core.get_db)):
         raise HTTPException(status_code=400, detail="الاسم مطلوب")
     row = CompanyLead(
         lead_type=lead_type if lead_type in {"merchant", "supplier"} else "merchant",
-        source="manual",
-        name=name,
+        source="manual", name=name,
         category=_form_value(form, "category") or None,
         city=_form_value(form, "city") or None,
         url=_form_value(form, "url") or None,
@@ -151,6 +148,7 @@ async def hunter_add(request: Request, db: Session = Depends(core.get_db)):
     )
     db.add(row)
     db.commit()
+    db.refresh(row)
     core.log_event(db, "company_lead_created", details=f"lead={row.id}; type={row.lead_type}; name={name}")
     return RedirectResponse("/admin/company/hunter", status_code=303)
 
@@ -164,10 +162,11 @@ def hunter_detail(lead_id: int, request: Request, db: Session = Depends(core.get
     if not row:
         raise HTTPException(status_code=404, detail="Lead غير موجود")
     options = "".join(f"<option value='{s}' {'selected' if s == row.status else ''}>{STATUS_AR[s]}</option>" for s in PIPELINE)
+    opportunity_ref = ("OP-%04d" % row.opportunity_id) if row.opportunity_id else "—"
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:900px;margin:auto;padding:24px'>
       <div style='display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap'><div><h1>{core.esc(row.name)}</h1><p class='muted'>{'تاجر / شريك' if row.lead_type == 'merchant' else 'مورد منتج'}</p></div><a class='btn btn-muted' href='/admin/company/hunter'>رجوع</a></div>
-      <table><tbody><tr><th>المصدر</th><td>{core.esc(row.source)}</td></tr><tr><th>الفئة</th><td>{core.esc(row.category or '—')}</td></tr><tr><th>المدينة</th><td>{core.esc(row.city or '—')}</td></tr><tr><th>التواصل</th><td>{core.esc(row.contact or '—')}</td></tr><tr><th>الفرصة</th><td>{('OP-%04d' % row.opportunity_id) if row.opportunity_id else '—'}</td></tr></tbody></table>
+      <table><tbody><tr><th>المصدر</th><td>{core.esc(row.source)}</td></tr><tr><th>الفئة</th><td>{core.esc(row.category or '—')}</td></tr><tr><th>المدينة</th><td>{core.esc(row.city or '—')}</td></tr><tr><th>التواصل</th><td>{core.esc(row.contact or '—')}</td></tr><tr><th>الفرصة</th><td>{opportunity_ref}</td></tr></tbody></table>
       <form method='post' action='/admin/company/hunter/{row.id}/stage' style='margin-top:18px'><label>حالة الـPipeline</label><select class='select' name='stage'>{options}</select><button class='btn btn-blue' style='margin-top:10px' type='submit'>تحديث الحالة</button></form>
       <form method='post' action='/admin/company/hunter/{row.id}/prepare-contact' style='margin-top:12px'><button class='btn btn-muted' type='submit'>تجهيز موافقة للتواصل التجاري</button></form>
     </section></main>"""
