@@ -36,11 +36,7 @@ def _admin_redirect(request: Request):
 
 
 def _ensure_issue(db: Session, severity: str, issue_type: str, item_ref: str, title: str, details: str) -> None:
-    row = db.scalar(select(StoreOpsIssue).where(
-        StoreOpsIssue.status == "open",
-        StoreOpsIssue.issue_type == issue_type,
-        StoreOpsIssue.item_ref == item_ref,
-    ))
+    row = db.scalar(select(StoreOpsIssue).where(StoreOpsIssue.status == "open", StoreOpsIssue.issue_type == issue_type, StoreOpsIssue.item_ref == item_ref))
     if row:
         row.severity = severity
         row.title = title
@@ -51,16 +47,14 @@ def _ensure_issue(db: Session, severity: str, issue_type: str, item_ref: str, ti
 
 
 def run_store_ops_scan(db: Session) -> dict:
-    """Scan only data actually connected to this runtime; never invent full-catalog coverage."""
     scanned = 0
     found = 0
-
     partners = list(db.scalars(select(LocalPartnerProduct)).all())
     for row in partners:
         scanned += 1
         ref = row.product_id or row.sku or f"local-{row.id}"
         if not (row.product_name or "").strip():
-            _ensure_issue(db, "P1", "missing_product_name", ref, "اسم المنتج غير محفوظ في سجل الشريك", "المنتج مربوط محليًا لكن product_name فارغ؛ يجب الاعتماد على قراءة سلة عند توفرها أو استكمال الاسم في السجل المحلي.")
+            _ensure_issue(db, "P1", "missing_product_name", ref, "اسم المنتج غير محفوظ في سجل الشريك", "المنتج مربوط محليًا لكن اسم المنتج فارغ؛ يجب الاعتماد على قراءة سلة عند توفرها أو استكمال الاسم في السجل المحلي.")
             found += 1
         if not (row.partner_name or "").strip():
             _ensure_issue(db, "P0", "missing_partner", ref, "اسم الشريك مفقود", "لا يمكن تشغيل توجيه القسيمة بأمان بدون اسم شريك.")
@@ -83,6 +77,12 @@ def run_store_ops_scan(db: Session) -> dict:
     return {"scanned": scanned, "detected": found, "open": open_count}
 
 
+def _issue_action(issue: StoreOpsIssue) -> str:
+    if issue.status != "open":
+        return "—"
+    return f"<form method='post' action='/admin/company/store-ops/{issue.id}/resolve'><button class='btn btn-muted' type='submit'>تم الحل</button></form>"
+
+
 @core.app.get("/admin/company/store-ops", response_class=HTMLResponse)
 def store_ops_page(request: Request, db: Session = Depends(core.get_db)):
     redirect = _admin_redirect(request)
@@ -94,14 +94,13 @@ def store_ops_page(request: Request, db: Session = Depends(core.get_db)):
         "<tr>"
         f"<td>{core.esc(i.severity)}</td><td>{core.esc(i.issue_type)}</td><td>{core.esc(i.item_ref or '—')}</td>"
         f"<td><strong>{core.esc(i.title)}</strong><div class='muted'>{core.esc(i.details or '')}</div></td>"
-        f"<td>{core.esc(i.status)}</td>"
-        f"<td>{(f'<form method=\"post\" action=\"/admin/company/store-ops/{i.id}/resolve\"><button class=\"btn btn-muted\" type=\"submit\">تم الحل</button></form>' if i.status == 'open' else '—')}</td></tr>"
+        f"<td>{core.esc(i.status)}</td><td>{_issue_action(i)}</td></tr>"
         for i in issues
     ) or "<tr><td colspan='6' class='muted'>لا توجد مشاكل مرصودة ضمن البيانات المتصلة حاليًا.</td></tr>"
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'><div><h1 style='margin-bottom:4px'>تشغيل المتجر وجودة العرض</h1><p class='muted'>Store Operations & Merchandising</p></div><a class='btn btn-muted' href='/admin/company'>مركز التحكم</a></div>
-      <div class='alert' style='background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;margin-top:18px'><strong>النطاق الحالي:</strong> يفحص البيانات التي وصلت فعلًا إلى Google فقط. فحص AR/EN وRibbon والسعر قبل/بعد والصور والتصنيفات والـMetadata على كامل متجر سلة يحتاج Merchant API/قراءة الكتالوج.</div>
+      <div class='alert' style='background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;margin-top:18px'><strong>النطاق الحالي:</strong> يفحص البيانات التي وصلت فعلًا إلى Google فقط. فحص العربية/الإنجليزية والـRibbon والسعر قبل/بعد والصور والتصنيفات والـMetadata على كامل متجر سلة يحتاج Merchant API/قراءة الكتالوج.</div>
       <div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr);margin:18px 0'><section class='card' style='padding:18px'><div class='muted'>عناصر مفحوصة</div><strong style='font-size:28px'>{result['scanned']}</strong></section><section class='card' style='padding:18px'><div class='muted'>اكتشافات هذه الجولة</div><strong style='font-size:28px'>{result['detected']}</strong></section><section class='card' style='padding:18px'><div class='muted'>مشاكل مفتوحة</div><strong style='font-size:28px'>{result['open']}</strong></section></div>
       <section class='card' style='padding:22px'><div class='table-wrap'><table><thead><tr><th>الأولوية</th><th>النوع</th><th>المرجع</th><th>المشكلة</th><th>الحالة</th><th></th></tr></thead><tbody>{rows}</tbody></table></div></section>
     </main>"""
