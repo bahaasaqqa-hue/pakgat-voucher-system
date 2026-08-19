@@ -1,4 +1,4 @@
-"""Render/Uvicorn entry point."""
-from app.application import app
+"""Uvicorn entry point."""
+from app.gce_entry import app
 
 __all__ = ["app"]
