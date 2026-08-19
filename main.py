@@ -17,6 +17,8 @@ from app import ai_company_hunter as _ai_company_hunter  # noqa: F401 - merchant
 from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - store operations quality watch
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
 from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
-from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - approved Pakgat AI visual/control experience, import LAST
+from app import corporate_benefits as _corporate_benefits  # noqa: F401 - B2B employee verification + Salla group bridge
+from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - approved Pakgat AI visual/control experience
+from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company, import LAST
 
 __all__ = ["app"]
