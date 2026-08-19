@@ -7,6 +7,7 @@ from app import ai_company_growth as _ai_company_growth  # noqa: F401 - adds Sal
 from app import ai_company_sources as _ai_company_sources  # noqa: F401 - source inventory/status view
 from app import ai_company_dispatch as _ai_company_dispatch  # noqa: F401 - manual opportunity assignment + WhatsLoop dispatch
 from app import ai_company_pilot_scan as _ai_company_pilot_scan  # noqa: F401 - realistic pilot opportunity scan
+from app import ai_company_pilot_autoload as _ai_company_pilot_autoload  # noqa: F401 - load pilot feed once
 from app import ai_company_ar as _ai_company_ar  # noqa: F401 - Arabic UI + AI Company admin navigation
 
 __all__ = ["app"]
