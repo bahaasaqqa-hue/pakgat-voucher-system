@@ -2,7 +2,7 @@
 
 This module keeps the AI Company control plane on the same GCE/Postgres stack as
 Pakgat Voucher System. It adds a protected CEO dashboard plus a small central
-Data Hub for alerts, tasks and KPI snapshots. No Render dependency is used.
+Data Hub for alerts, tasks, opportunities and KPI snapshots. No Render dependency is used.
 """
 
 from __future__ import annotations
@@ -61,6 +61,26 @@ class CompanyTask(core.Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class CompanyOpportunity(core.Base):
+    """Actionable growth/market opportunity surfaced by Pakgat AI Company."""
+
+    __tablename__ = "company_opportunities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    priority: Mapped[str] = mapped_column(String(20), default="P2", index=True)
+    source: Mapped[str] = mapped_column(String(80), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    details: Mapped[Optional[str]] = mapped_column(String(1500), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 def _admin_redirect(request: Request):
     try:
         core.require_admin(request)
@@ -98,6 +118,11 @@ def collect_company_snapshot(db: Session) -> dict:
     oauth_rows = _count(db, core.SallaOAuthCredential)
     open_alerts = _count(db, CompanyAlert, CompanyAlert.status == "open")
     open_tasks = _count(db, CompanyTask, CompanyTask.status == "open")
+    open_opportunities = _count(
+        db,
+        CompanyOpportunity,
+        CompanyOpportunity.status.in_(["new", "review", "approved", "active"]),
+    )
 
     technology_score = 100.0
     if webhook_rejected:
@@ -136,6 +161,7 @@ def collect_company_snapshot(db: Session) -> dict:
             "whatsapp_failures": whatsapp_failed,
             "open_alerts": open_alerts,
             "open_tasks": open_tasks,
+            "open_opportunities": open_opportunities,
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -175,6 +201,45 @@ def ensure_alert(db: Session, severity: str, source: str, title: str, details: s
         )
     )
     db.commit()
+
+
+def ensure_opportunity(
+    db: Session,
+    priority: str,
+    source: str,
+    title: str,
+    details: str = "",
+    score: Optional[float] = None,
+) -> CompanyOpportunity:
+    """Create or refresh one open opportunity without duplicate rows."""
+    existing = db.scalar(
+        select(CompanyOpportunity).where(
+            CompanyOpportunity.status.in_(["new", "review", "approved", "active"]),
+            CompanyOpportunity.source == source,
+            CompanyOpportunity.title == title,
+        )
+    )
+    if existing:
+        existing.priority = priority
+        existing.details = details[:1500] or existing.details
+        existing.score = score if score is not None else existing.score
+        existing.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    row = CompanyOpportunity(
+        priority=priority,
+        source=source,
+        title=title,
+        details=details[:1500] or None,
+        score=score,
+        status="new",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def evaluate_alerts(db: Session, snapshot: dict) -> None:
@@ -224,6 +289,14 @@ def company_dashboard(request: Request, db: Session = Depends(core.get_db)):
             .limit(20)
         ).all()
     )
+    opportunities = list(
+        db.scalars(
+            select(CompanyOpportunity)
+            .where(CompanyOpportunity.status.in_(["new", "review", "approved", "active"]))
+            .order_by(CompanyOpportunity.score.desc().nullslast(), CompanyOpportunity.created_at.desc())
+            .limit(20)
+        ).all()
+    )
 
     def badge(ok: bool, yes: str = "جاهز", no: str = "يحتاج متابعة") -> str:
         cls = "badge-active" if ok else "badge-expired"
@@ -246,6 +319,19 @@ def company_dashboard(request: Request, db: Session = Depends(core.get_db)):
         for t in tasks
     ) or "<tr><td colspan='4' class='muted'>لا توجد مهام مفتوحة.</td></tr>"
 
+    opportunity_rows = "".join(
+        "<tr>"
+        f"<td>{core.esc(o.priority)}</td>"
+        f"<td>{core.esc(o.source)}</td>"
+        f"<td><strong>{core.esc(o.title)}</strong>"
+        f"<div class='muted' style='margin-top:4px'>{core.esc(o.details or '')}</div></td>"
+        f"<td>{core.esc(f'{o.score:.1f}' if o.score is not None else '—')}</td>"
+        f"<td>{core.esc(o.status)}</td>"
+        f"<td>{core.esc(core.fmt_dt(o.created_at))}</td>"
+        "</tr>"
+        for o in opportunities
+    ) or "<tr><td colspan='6' class='muted'>لا توجد فرص مفتوحة حتى الآن. ستظهر هنا تلقائياً عند تفعيل رادارات السوق والمنتجات وSEO.</td></tr>"
+
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap'>
@@ -256,12 +342,21 @@ def company_dashboard(request: Request, db: Session = Depends(core.get_db)):
         </form>
       </div>
 
-      <div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin:18px 0'>
+      <div class='grid grid-mobile-1' style='grid-template-columns:repeat(5,1fr);margin:18px 0'>
         <section class='card' style='padding:20px'><div class='muted'>Company Health</div><div style='font-size:34px;font-weight:900'>{snapshot['overall_score']}/100</div></section>
         <section class='card' style='padding:20px'><div class='muted'>Technology</div><div style='font-size:34px;font-weight:900'>{snapshot['technology_score']}/100</div></section>
         <section class='card' style='padding:20px'><div class='muted'>Vouchers</div><div style='font-size:34px;font-weight:900'>{snapshot['vouchers']['total']}</div></section>
         <section class='card' style='padding:20px'><div class='muted'>Open Alerts</div><div style='font-size:34px;font-weight:900'>{snapshot['operations']['open_alerts']}</div></section>
+        <section class='card' style='padding:20px'><div class='muted'>Opportunities</div><div style='font-size:34px;font-weight:900'>{snapshot['operations']['open_opportunities']}</div></section>
       </div>
+
+      <section class='card' style='padding:22px;margin-bottom:18px'>
+        <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
+          <div><h2 style='margin-bottom:4px'>الفرص الجديدة لـ Pakgat</h2><div class='muted'>Market · Products · Pricing · SEO · Merchants · Growth</div></div>
+          <span class='badge badge-active'>{snapshot['operations']['open_opportunities']} فرصة مفتوحة</span>
+        </div>
+        <div class='table-wrap' style='margin-top:14px'><table><thead><tr><th>Priority</th><th>Source</th><th>Opportunity</th><th>Score</th><th>Status</th><th>Created</th></tr></thead><tbody>{opportunity_rows}</tbody></table></div>
+      </section>
 
       <div class='grid grid-mobile-1' style='grid-template-columns:1fr 1fr;margin-bottom:18px'>
         <section class='card' style='padding:22px'>
@@ -320,4 +415,5 @@ def company_health(db: Session = Depends(core.get_db)):
         "overall_score": snapshot["overall_score"],
         "technology_score": snapshot["technology_score"],
         "voucher_score": snapshot["voucher_score"],
+        "open_opportunities": snapshot["operations"]["open_opportunities"],
     }
