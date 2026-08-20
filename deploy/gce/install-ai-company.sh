@@ -12,10 +12,11 @@ sudo -u pakgat git -C "$APP_DIR" fetch origin
 sudo -u pakgat git -C "$APP_DIR" checkout gce-migration
 sudo -u pakgat git -C "$APP_DIR" pull --ff-only origin gce-migration
 
-# Safety gate: do not restart the live voucher service if a newly added AI
-# Company or Corporate Benefits module has a Python syntax error.
+# Safety gate: do not restart the live voucher service if a newly added AI,
+# Corporate Benefits, or Salla integration module has a Python syntax error.
 sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
   "$APP_DIR/main.py" \
+  "$APP_DIR/app/salla_products_read_only.py" \
   "$APP_DIR"/app/ai_company*.py \
   "$APP_DIR"/app/corporate*.py
 
