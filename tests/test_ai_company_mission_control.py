@@ -64,6 +64,33 @@ class MissionControlTests(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
+    def test_compact_dashboard_matches_approved_information_architecture(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        for marker in (
+            "mc-executive-summary",
+            "Market Watch",
+            "Product & Pricing Intelligence",
+            "Merchant Hunter",
+            "Voucher & WhatsApp",
+            "SEO & Catalog Watch",
+            "Sourcing Watch",
+            "Technology & Systems",
+            "mc-department-map",
+            "<details class='mc-ai-insights'",
+        ):
+            self.assertIn(marker, source)
+
+    def test_sidebar_embeds_approved_pakgat_logo(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        self.assertIn("PAKGAT_LOGO_DATA_URI", source)
+        self.assertIn("data:image/webp;base64,", source)
+        self.assertIn("mc-brand-logo", source)
+
+    def test_production_system_card_does_not_claim_render_is_active(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        self.assertNotIn("<span>Render</span>", source)
+        self.assertNotIn("Render</strong>", source)
+
     def test_mission_control_ui_has_protected_command_endpoint(self):
         source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
         self.assertIn('@core.app.post("/admin/company/command")', source)
@@ -74,10 +101,10 @@ class MissionControlTests(unittest.TestCase):
         source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
         for marker in (
             "@keyframes aiCorePulse",
-            ".mc-command",
-            ".mc-situation",
-            ".mc-matrix",
-            ".mc-activity",
+            ".mc-command-strip",
+            ".mc-dashboard-grid",
+            ".mc-intel-grid",
+            ".mc-ai-insights",
         ):
             self.assertIn(marker, source)
 
