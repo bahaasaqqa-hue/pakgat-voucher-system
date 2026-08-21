@@ -21,7 +21,8 @@ from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 
 from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corporate DB/admin base
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
-from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - approved Pakgat AI visual/control experience
+from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - Pakgat AI visual/control experience
+from app import ai_company_mission_control_ui as _ai_company_mission_control_ui  # noqa: F401 - Mission Control home, AI Core, command bar and intelligence panels
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company, import LAST
 
