@@ -76,7 +76,7 @@ class UnifiedAdminThemeTests(unittest.TestCase):
         self.assertIn('@core.app.middleware("http")', source)
         self.assertIn('@core.app.get("/admin/theme/logo"', source)
         self.assertIn('path.startswith("/admin")', source)
-        self.assertIn('request.method.upper() not in {"GET", "HEAD"}', source)
+        self.assertIn('request.method.upper() != "GET"', source)
         self.assertIn('300 <= response.status_code < 400', source)
         self.assertIn('"text/html" not in content_type', source)
         self.assertIn('apply_admin_theme(source, path, "/admin/theme/logo")', source)
