@@ -59,6 +59,23 @@ class UnifiedAdminThemeTests(unittest.TestCase):
         self.assertIn("body[data-unified-admin-theme='ai'] .ai-nav a.active", rendered)
         self.assertIn("body[data-unified-admin-theme='ai'] .ai-top{top:0!important", rendered)
 
+    def test_ai_company_typography_is_standardized_across_subpages(self):
+        html = """<html><head><title>AI</title></head><body><div class='ai-layout'><aside class='ai-sidebar'><nav class='ai-nav'></nav></aside><section class='ai-workspace'><main><h1 style='font-size:44px'>H1</h1><h2 style='font-size:31px'>H2</h2><h3>H3</h3><p class='muted'>M</p><table><tr><td>T</td></tr></table><button class='btn'>B</button><input class='input'></main></section></div></body></html>"""
+        rendered = apply_admin_theme(html, "/admin/company/opportunities", LOGO)
+        required = (
+            "body[data-unified-admin-theme='ai']{font-size:13px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace h1{font-size:22px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace h2{font-size:17px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace h3{font-size:14px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace td{font-size:12px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace .muted{font-size:11px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace .btn{font-size:12px!important",
+            "body[data-unified-admin-theme='ai'] .ai-workspace .input{font-size:12px!important",
+            "body[data-unified-admin-theme='ai'] .ai-kpi .value{font-size:28px!important",
+        )
+        for marker in required:
+            self.assertIn(marker, rendered)
+
     def test_ai_company_theme_is_idempotent(self):
         html = """<html><head><title>AI</title></head><body><div class='ai-layout'><aside class='ai-sidebar'><nav class='ai-nav'></nav></aside><section class='ai-workspace'>X</section></div></body></html>"""
         once = apply_admin_theme(html, "/admin/company/seo", LOGO)
