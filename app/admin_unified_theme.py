@@ -69,8 +69,8 @@ async def unified_admin_theme_middleware(request, call_next):
     if not path.startswith("/admin"):
         return response
 
-    # Keep state-changing actions and their response semantics completely untouched.
-    if request.method.upper() not in {"GET", "HEAD"}:
+    # Keep HEAD and all state-changing actions completely untouched.
+    if request.method.upper() != "GET":
         return response
 
     # Auth redirects and route redirects must remain byte-for-byte route semantics.
