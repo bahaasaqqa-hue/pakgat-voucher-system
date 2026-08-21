@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +59,10 @@ _ALLOWED_IMAGE_MIME_TO_FORMAT = {
     "image/png": "PNG",
     "image/webp": "WEBP",
 }
+_REPORT_URL_RE = re.compile(
+    r"https?://[^\s<>]+/agent/report/[A-Za-z0-9_-]+",
+    re.IGNORECASE,
+)
 
 
 class OpportunityReportLink(core.Base):
@@ -121,9 +126,13 @@ def append_report_link(message: str, url: str) -> str:
         "بعد التواصل أو الزيارة افتح الرابط وسجّل الإجراء والملاحظات، ويمكنك رفع صورة إثبات اختيارية:\n"
         f"{url}"
     )
-    # OpportunityDispatch.message is 4000 chars. Leave room for the secure block.
     max_base = max(0, 4000 - len(block) - 4)
     return base[:max_base].rstrip() + block
+
+
+def redact_report_link_for_storage(message: str) -> str:
+    """Remove bearer tokens from the database copy of an outbound message."""
+    return _REPORT_URL_RE.sub("[رابط التقرير الآمن تم إرساله]", str(message or ""))
 
 
 def map_agent_action(current_status: str, action: str) -> str:
@@ -149,16 +158,16 @@ def revoke_opportunity_links(
     db: Session,
     opportunity_id: int,
     now: Optional[datetime] = None,
+    except_link_id: Optional[int] = None,
 ) -> None:
     current = now or _now()
-    links = list(
-        db.scalars(
-            select(OpportunityReportLink).where(
-                OpportunityReportLink.opportunity_id == int(opportunity_id),
-                OpportunityReportLink.revoked_at.is_(None),
-            )
-        ).all()
+    stmt = select(OpportunityReportLink).where(
+        OpportunityReportLink.opportunity_id == int(opportunity_id),
+        OpportunityReportLink.revoked_at.is_(None),
     )
+    if except_link_id is not None:
+        stmt = stmt.where(OpportunityReportLink.id != int(except_link_id))
+    links = list(db.scalars(stmt).all())
     for link in links:
         link.revoked_at = current
 
@@ -170,9 +179,8 @@ def create_report_capability(
     agent_id: int,
     now: Optional[datetime] = None,
 ) -> tuple[OpportunityReportLink, str]:
+    """Create a candidate capability without disrupting a previous assignment."""
     current = now or _now()
-    # Reassignment invalidates older bearer links for the same opportunity.
-    revoke_opportunity_links(db, opportunity_id, current)
     raw_token = secrets.token_urlsafe(32)
     link = OpportunityReportLink(
         dispatch_id=int(dispatch_id),
@@ -190,6 +198,20 @@ def create_report_capability(
         f"opportunity=OP-{int(opportunity_id):04d}; dispatch={int(dispatch_id)}; agent={int(agent_id)}",
     )
     return link, raw_token
+
+
+def activate_report_capability(
+    db: Session,
+    link: OpportunityReportLink,
+    now: Optional[datetime] = None,
+) -> None:
+    """After successful delivery, revoke older bearer links for this opportunity."""
+    revoke_opportunity_links(
+        db,
+        link.opportunity_id,
+        now=now,
+        except_link_id=link.id,
+    )
 
 
 def revoke_report_capability(
@@ -272,16 +294,13 @@ def store_verified_evidence(
             raise ValueError("نوع الملف لا يطابق محتوى الصورة.")
         if width <= 0 or height <= 0 or width * height > 25_000_000:
             raise ValueError("أبعاد الصورة غير مقبولة.")
-        with Image.open(io.BytesIO(payload)) as source:
-            source.load()
-            if source.mode not in {"RGB", "RGBA"}:
-                source = source.convert("RGB")
-            elif source.mode == "RGBA":
-                # WebP supports alpha; keep it rather than flattening unexpectedly.
-                source = source.copy()
+        with Image.open(io.BytesIO(payload)) as opened:
+            opened.load()
+            if opened.mode not in {"RGB", "RGBA"}:
+                source = opened.convert("RGB")
             else:
-                source = source.copy()
-    except (UnidentifiedImageError, OSError, SyntaxError) as exc:
+                source = opened.copy()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as exc:
         raise ValueError("الملف المرفوع ليس صورة صالحة.") from exc
 
     storage_root = Path(root or EVIDENCE_ROOT)
@@ -380,7 +399,7 @@ async def agent_report_submit(token: str, request: Request, db: Session = Depend
     context = _report_context(db, token)
     if not context:
         return _invalid_report_page()
-    link, opportunity, agent, dispatch = context
+    _link, opportunity, agent, dispatch = context
 
     form = await request.form()
     action = str(form.get("action") or "").strip().lower()
@@ -423,18 +442,19 @@ async def agent_report_submit(token: str, request: Request, db: Session = Depend
     db.add(report)
     opportunity.status = map_agent_action(opportunity.status, action)
     opportunity.updated_at = current
-    _audit(
-        db,
-        "opportunity_agent_report_submitted",
-        f"opportunity=OP-{opportunity.id:04d}; dispatch={dispatch.id}; agent={agent.id}; action={action}",
-    )
-    if evidence_filename:
+    try:
+        db.flush()
         _audit(
             db,
-            "opportunity_evidence_uploaded",
-            f"opportunity=OP-{opportunity.id:04d}; report=pending; agent={agent.id}",
+            "opportunity_agent_report_submitted",
+            f"opportunity=OP-{opportunity.id:04d}; report={report.id}; dispatch={dispatch.id}; agent={agent.id}; action={action}",
         )
-    try:
+        if evidence_filename:
+            _audit(
+                db,
+                "opportunity_evidence_uploaded",
+                f"opportunity=OP-{opportunity.id:04d}; report={report.id}; agent={agent.id}",
+            )
         db.commit()
         db.refresh(report)
     except Exception:
