@@ -69,11 +69,37 @@ class AgentReportingTests(unittest.TestCase):
             reporting.resolve_report_capability(self.db, raw, now=self.now + timedelta(days=31))
         )
 
-    def test_message_gets_report_url_without_exposing_token_elsewhere(self):
+    def test_new_capability_does_not_revoke_previous_until_new_assignment_succeeds(self):
+        first, _first_raw = reporting.create_report_capability(
+            self.db, 1, self.opportunity.id, 10, now=self.now
+        )
+        self.db.commit()
+        second, _second_raw = reporting.create_report_capability(
+            self.db, 2, self.opportunity.id, 11, now=self.now + timedelta(hours=1)
+        )
+        self.db.commit()
+        self.db.refresh(first)
+        self.assertIsNone(first.revoked_at)
+        self.assertIsNone(second.revoked_at)
+
+        reporting.activate_report_capability(
+            self.db, second, now=self.now + timedelta(hours=1, minutes=1)
+        )
+        self.db.commit()
+        self.db.refresh(first)
+        self.db.refresh(second)
+        self.assertIsNotNone(first.revoked_at)
+        self.assertIsNone(second.revoked_at)
+
+    def test_message_gets_report_url_but_storage_copy_redacts_raw_token(self):
         url = reporting.report_url("secret-token")
         message = reporting.append_report_link("رسالة الفرصة", url)
         self.assertIn("https://voucher.pakgat.com/agent/report/secret-token", message)
         self.assertIn("تحديث نتيجة الفرصة", message)
+        stored = reporting.redact_report_link_for_storage(message)
+        self.assertNotIn("secret-token", stored)
+        self.assertNotIn("/agent/report/", stored)
+        self.assertIn("رابط التقرير الآمن تم إرساله", stored)
 
     def test_action_mapping_preserves_follow_up_and_maps_business_stages(self):
         self.assertEqual(reporting.map_agent_action("assigned", "follow_up"), "assigned")
@@ -150,6 +176,8 @@ class AgentReportingTests(unittest.TestCase):
         dispatch = Path("app/ai_company_dispatch.py").read_text(encoding="utf-8")
         self.assertIn("create_report_capability", dispatch)
         self.assertIn("append_report_link", dispatch)
+        self.assertIn("activate_report_capability", dispatch)
+        self.assertIn("redact_report_link_for_storage", dispatch)
         self.assertIn("revoke_report_capability", dispatch)
         self.assertIn('opportunity.status = "assigned"', dispatch)
         self.assertIn("رابطًا آمنًا", dispatch)
