@@ -64,7 +64,7 @@ class UnifiedAdminThemeTests(unittest.TestCase):
         once = apply_admin_theme(html, "/admin/company/seo", LOGO)
         twice = apply_admin_theme(once, "/admin/company/seo", LOGO)
         self.assertEqual(once, twice)
-        self.assertEqual(once.count("ua-ai-admin-return"), 1)
+        self.assertEqual(once.count("class='ua-ai-admin-return'"), 1)
 
     def test_login_is_branded_without_authenticated_sidebar(self):
         html = "<html><head><title>تسجيل الدخول | Pakgat</title></head><body><main><form><input name='username'></form></main></body></html>"
