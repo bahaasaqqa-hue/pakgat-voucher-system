@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
 from app import ai_company
+from app.ai_company_readiness import salla_source_access
 
 
 class CompanySourceStatus(core.Base):
@@ -53,7 +54,13 @@ SOURCE_DEFS = [
 
 
 def refresh_source_inventory(db: Session) -> None:
-    oauth_connected = bool(db.scalar(select(core.SallaOAuthCredential.id).limit(1)))
+    oauth_row = db.scalar(
+        select(core.SallaOAuthCredential)
+        .order_by(core.SallaOAuthCredential.updated_at.desc())
+        .limit(1)
+    )
+    oauth_connected = bool(oauth_row)
+    oauth_scope = str(oauth_row.scope or "") if oauth_row else ""
     now = datetime.now(timezone.utc)
 
     for source, category, default_status in SOURCE_DEFS:
@@ -65,9 +72,12 @@ def refresh_source_inventory(db: Session) -> None:
             status = "Connected" if core.SALLA_WEBHOOK_SECRET else "Needs Integration"
         elif source == "Salla OAuth / Merchant API":
             status = "Connected" if oauth_connected else "Needs Integration"
-            detail = "OAuth stored in Google DB" if oauth_connected else "Current mode: Local fallback"
+            if oauth_connected:
+                detail = "OAuth stored in Google DB; scope captured" if oauth_scope else "OAuth stored in Google DB; scope missing"
+            else:
+                detail = "Current mode: Local fallback"
         elif source in {"Salla Products / Inventory", "Salla Abandoned Carts", "Salla Reviews"}:
-            status = "Readable" if oauth_connected else "Needs Integration"
+            status, detail = salla_source_access(source, oauth_connected, oauth_scope)
         elif source == "GitHub":
             detail = "Source control / deployment history"
         elif source == "Google Compute Engine":
