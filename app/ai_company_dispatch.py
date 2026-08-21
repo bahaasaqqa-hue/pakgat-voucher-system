@@ -3,7 +3,6 @@
 No opportunity is sent automatically. A protected admin user must choose an active
 agent, review/edit the message, and explicitly confirm the WhatsApp send.
 """
-
 from __future__ import annotations
 
 import json
@@ -19,8 +18,8 @@ from fastapi.routing import APIRoute
 from sqlalchemy import DateTime, Integer, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app import application as core
 from app import ai_company
+from app import application as core
 
 
 class CompanyAgent(core.Base):
@@ -198,39 +197,30 @@ def opportunity_assignment_center(request: Request, db: Session = Depends(core.g
     redirect = _admin_redirect(request)
     if redirect:
         return redirect
-
     opportunities = list(
         db.scalars(
             select(ai_company.CompanyOpportunity)
             .where(ai_company.CompanyOpportunity.status.in_(OPEN_STAGES))
-            .order_by(ai_company.CompanyOpportunity.score.desc().nullslast(), ai_company.CompanyOpportunity.created_at.desc())
+            .order_by(ai_company.CompanyOpportunity.created_at.desc(), ai_company.CompanyOpportunity.id.desc())
         ).all()
     )
     agents_count = int(db.scalar(select(func.count(CompanyAgent.id)).where(CompanyAgent.status == "active")) or 0)
     rows = "".join(
         "<tr>"
-        f"<td>OP-{o.id:04d}</td>"
-        f"<td>{core.esc(o.priority)}</td>"
-        f"<td>{core.esc(o.source)}</td>"
+        f"<td>OP-{o.id:04d}</td><td>{core.esc(o.priority)}</td><td>{core.esc(o.source)}</td>"
         f"<td><strong>{core.esc(o.title)}</strong><div class='muted'>{core.esc(o.details or '')}</div></td>"
-        f"<td>{core.esc(f'{o.score:.1f}' if o.score is not None else '—')}</td>"
-        f"<td>{core.esc(o.status)}</td>"
-        f"<td><a class='btn btn-blue' href='/admin/company/opportunities/{o.id}/assign'>إسناد وإرسال</a></td>"
-        "</tr>"
+        f"<td>{core.esc(f'{o.score:.1f}' if o.score is not None else '—')}</td><td>{core.esc(o.status)}</td>"
+        f"<td><a class='btn btn-blue' href='/admin/company/opportunities/{o.id}/assign'>إسناد وإرسال</a></td></tr>"
         for o in opportunities
     ) or "<tr><td colspan='7' class='muted'>لا توجد فرص مفتوحة حاليًا.</td></tr>"
-
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
         <div><h1 style='margin-bottom:4px'>الفرص · الإسناد والتنفيذ</h1><p class='muted'>الإرسال لا يتم تلقائيًا. أنت تختار المندوب وتراجع الرسالة ثم تؤكد الإرسال.</p></div>
         <div style='display:flex;gap:8px'><a class='btn btn-muted' href='/admin/company'>Control Center</a><a class='btn btn-blue' href='/admin/company/agents'>المندوبون ({agents_count})</a></div>
       </div>
-      <section class='card' style='padding:22px;margin-top:18px'>
-        <div class='table-wrap'><table><thead><tr><th>ID</th><th>Priority</th><th>Source</th><th>Opportunity</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div>
-      </section>
-    </main>
-    """
+      <section class='card' style='padding:22px;margin-top:18px'><div class='table-wrap'><table><thead><tr><th>ID</th><th>Priority</th><th>Source</th><th>Opportunity</th><th>Score</th><th>Status</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section>
+    </main>"""
     return HTMLResponse(core.page_shell("إسناد الفرص", body, admin=True))
 
 
@@ -239,7 +229,6 @@ def opportunity_assign_page(opportunity_id: int, request: Request, db: Session =
     redirect = _admin_redirect(request)
     if redirect:
         return redirect
-
     opportunity = db.get(ai_company.CompanyOpportunity, opportunity_id)
     if not opportunity:
         raise HTTPException(status_code=404, detail="Opportunity not found")
@@ -249,11 +238,8 @@ def opportunity_assign_page(opportunity_id: int, request: Request, db: Session =
     options = "".join(
         f"<option value='{a.id}'>{core.esc(a.name)} · {core.esc(a.city or 'بدون مدينة')} · {core.esc(a.specialties or 'عام')}</option>"
         for a in agents
-    )
-    if not options:
-        options = "<option value=''>أضف مندوبًا أولاً من دليل المندوبين</option>"
+    ) or "<option value=''>أضف مندوبًا أولاً من دليل المندوبين</option>"
     message = _default_message(opportunity)
-
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <section class='card' style='max-width:900px;margin:auto;padding:24px'>
@@ -263,17 +249,16 @@ def opportunity_assign_page(opportunity_id: int, request: Request, db: Session =
         </div>
         <div class='alert' style='background:#fff7ed;color:#9a3412;border:1px solid #fed7aa'><strong>موافقة مطلوبة:</strong> لن يتم إرسال أي رسالة قبل ضغطك على زر التأكيد النهائي أدناه.</div>
         <form method='post' action='/admin/company/opportunities/{opportunity.id}/assign'>
-          <label>المندوب</label>
-          <select class='select' name='agent_id' required>{options}</select>
+          <label>المندوب</label><select class='select' name='agent_id' required>{options}</select>
           <label style='margin-top:14px'>نص رسالة واتساب — قابل للتعديل</label>
           <textarea class='input' name='message' rows='14' style='resize:vertical' required>{core.esc(message)}</textarea>
+          <p class='muted' style='font-size:12px;margin:7px 0 0'>سيضيف النظام تلقائيًا رابطًا آمنًا للمندوب لتحديث النتيجة ورفع إثبات اختياري.</p>
           <label style='margin-top:14px;display:flex;gap:8px;align-items:center'><input type='checkbox' name='confirm_send' value='1' required> أؤكد إسناد هذه الفرصة وإرسال الرسالة الآن عبر WhatsLoop.</label>
           <button class='btn btn-blue' style='margin-top:14px;width:100%' type='submit' onclick='return confirm(&quot;تأكيد إرسال فرصة OP-{opportunity.id:04d} إلى المندوب المختار عبر واتساب؟&quot;);'>تأكيد الإسناد والإرسال</button>
         </form>
         <p class='muted' style='margin-top:14px'>لإضافة مندوب جديد: <a href='/admin/company/agents' style='color:#2446ba;font-weight:800'>دليل المندوبين</a></p>
       </section>
-    </main>
-    """
+    </main>"""
     return HTMLResponse(core.page_shell("إسناد فرصة", body, admin=True))
 
 
@@ -282,7 +267,6 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
     redirect = _admin_redirect(request)
     if redirect:
         return redirect
-
     opportunity = db.get(ai_company.CompanyOpportunity, opportunity_id)
     if not opportunity:
         raise HTTPException(status_code=404, detail="Opportunity not found")
@@ -302,23 +286,38 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
+    # Lazy import avoids a module cycle: reporting imports the dispatch models above.
+    from app import ai_company_agent_reporting as reporting
+
     dispatch = OpportunityDispatch(
         opportunity_id=opportunity.id,
         agent_id=agent.id,
-        message=message[:4000],
+        message="",
         status="sending",
     )
     db.add(dispatch)
+    db.flush()
+    report_link, raw_token = reporting.create_report_capability(
+        db,
+        dispatch_id=dispatch.id,
+        opportunity_id=opportunity.id,
+        agent_id=agent.id,
+    )
+    final_message = reporting.append_report_link(message, reporting.report_url(raw_token))
+    dispatch.message = final_message[:4000]
+    # Persist the hashed capability before the outbound send. Raw token is never stored.
     db.commit()
     db.refresh(dispatch)
+    db.refresh(report_link)
 
-    ok, provider_status = _send_whatsloop(agent.phone, message)
+    ok, provider_status = _send_whatsloop(agent.phone, dispatch.message)
     dispatch.provider_status = provider_status[:500]
     if ok:
+        now = datetime.now(timezone.utc)
         dispatch.status = "sent"
-        dispatch.sent_at = datetime.now(timezone.utc)
+        dispatch.sent_at = now
         opportunity.status = "assigned"
-        opportunity.updated_at = datetime.now(timezone.utc)
+        opportunity.updated_at = now
         db.commit()
         core.log_event(
             db,
@@ -330,11 +329,13 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
         )
         result = (
             "<div class='alert alert-ok'><strong>تم الإسناد والإرسال بنجاح ✅</strong>"
-            f"<div style='margin-top:8px'>OP-{opportunity.id:04d} → {core.esc(agent.name)}</div></div>"
+            f"<div style='margin-top:8px'>OP-{opportunity.id:04d} → {core.esc(agent.name)}</div>"
+            "<div class='muted' style='margin-top:6px'>تم تضمين رابط تحديث آمن للمندوب داخل الرسالة.</div></div>"
         )
         code = 200
     else:
         dispatch.status = "failed"
+        reporting.revoke_report_capability(db, report_link)
         db.commit()
         core.log_event(
             db,
@@ -346,21 +347,13 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
         )
         result = (
             "<div class='alert alert-error'><strong>فشل إرسال WhatsApp.</strong>"
-            f"<div style='margin-top:8px' dir='ltr'>{core.esc(provider_status)}</div></div>"
+            f"<div style='margin-top:8px' dir='ltr'>{core.esc(provider_status)}</div>"
+            "<div class='muted' style='margin-top:6px'>لم يتم اعتبار الفرصة مسندة وتم إلغاء رابط التقرير.</div></div>"
         )
         code = 502
 
     body = f"""
-    <main class='wrap' style='padding:40px 0'>
-      <section class='card' style='max-width:760px;margin:auto;padding:24px'>
-        {result}
-        <div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:18px'>
-          <a class='btn btn-blue' href='/admin/company/opportunities'>العودة للفرص</a>
-          <a class='btn btn-muted' href='/admin/company'>Control Center</a>
-        </div>
-      </section>
-    </main>
-    """
+    <main class='wrap' style='padding:40px 0'><section class='card' style='max-width:760px;margin:auto;padding:24px'>{result}<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:18px'><a class='btn btn-blue' href='/admin/company/opportunities'>العودة للفرص</a><a class='btn btn-muted' href='/admin/company'>Control Center</a></div></section></main>"""
     return HTMLResponse(core.page_shell("نتيجة إرسال الفرصة", body, admin=True), status_code=code)
 
 
@@ -407,22 +400,17 @@ if _company_route is not None:
                 select(func.count(ai_company.CompanyOpportunity.id)).where(
                     ai_company.CompanyOpportunity.status.in_(["assigned", "contacted", "replied", "negotiating"])
                 )
-            )
-            or 0
+            ) or 0
         )
         section = f"""
         <section class='card' style='padding:22px;margin-bottom:18px'>
           <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
-            <div><h2 style='margin-bottom:4px'>Opportunity Dispatch · المندوبون</h2>
-            <p class='muted' style='margin-top:0'>إسناد يدوي + مراجعة الرسالة + إرسال WhatsLoop بعد موافقتك فقط.</p></div>
+            <div><h2 style='margin-bottom:4px'>Opportunity Dispatch · المندوبون</h2><p class='muted' style='margin-top:0'>إسناد يدوي + مراجعة الرسالة + إرسال WhatsLoop بعد موافقتك فقط.</p></div>
             <div style='display:flex;gap:8px;flex-wrap:wrap'><a class='btn btn-blue' href='/admin/company/opportunities'>إدارة وإسناد الفرص</a><a class='btn btn-muted' href='/admin/company/agents'>المندوبون ({active_agents})</a></div>
-          </div>
-          <p style='margin-bottom:0'><strong>فرص تحت التنفيذ:</strong> {assigned}</p>
-        </section>
-        """
+          </div><p style='margin-bottom:0'><strong>فرص تحت التنفيذ:</strong> {assigned}</p>
+        </section>"""
         html = response.body.decode("utf-8", errors="replace")
-        marker = "</main>"
-        html = html.replace(marker, section + marker, 1)
+        html = html.replace("</main>", section + "</main>", 1)
         response.body = html.encode("utf-8")
         response.headers["content-length"] = str(len(response.body))
         return response
