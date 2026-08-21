@@ -1,8 +1,12 @@
 import io
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Unit tests must never depend on the production systemd environment or database.
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from PIL import Image
 from sqlalchemy import create_engine
