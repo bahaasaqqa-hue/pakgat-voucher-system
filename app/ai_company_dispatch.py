@@ -304,16 +304,17 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
         agent_id=agent.id,
     )
     final_message = reporting.append_report_link(message, reporting.report_url(raw_token))
-    dispatch.message = final_message[:4000]
-    # Persist the hashed capability before the outbound send. Raw token is never stored.
+    # The provider receives the bearer URL; the database stores a redacted copy only.
+    dispatch.message = reporting.redact_report_link_for_storage(final_message)[:4000]
     db.commit()
     db.refresh(dispatch)
     db.refresh(report_link)
 
-    ok, provider_status = _send_whatsloop(agent.phone, dispatch.message)
+    ok, provider_status = _send_whatsloop(agent.phone, final_message)
     dispatch.provider_status = provider_status[:500]
     if ok:
         now = datetime.now(timezone.utc)
+        reporting.activate_report_capability(db, report_link, now=now)
         dispatch.status = "sent"
         dispatch.sent_at = now
         opportunity.status = "assigned"
@@ -348,7 +349,7 @@ async def opportunity_assign_send(opportunity_id: int, request: Request, db: Ses
         result = (
             "<div class='alert alert-error'><strong>فشل إرسال WhatsApp.</strong>"
             f"<div style='margin-top:8px' dir='ltr'>{core.esc(provider_status)}</div>"
-            "<div class='muted' style='margin-top:6px'>لم يتم اعتبار الفرصة مسندة وتم إلغاء رابط التقرير.</div></div>"
+            "<div class='muted' style='margin-top:6px'>لم يتم اعتبار الفرصة مسندة وتم إلغاء رابط التقرير الجديد فقط.</div></div>"
         )
         code = 502
 
