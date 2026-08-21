@@ -22,6 +22,7 @@ from app import ai_company
 from app import ai_company_sources
 from app.ai_company_governance import CompanyApproval, generate_ceo_brief
 from app.ai_company_hunter import CompanyLead
+from app.ai_company_readiness import summarize_system_statuses
 from app.ai_company_store_ops import StoreOpsIssue
 from app.salla_data import SallaOrderSnapshot, SallaOrderItemSnapshot
 
@@ -49,6 +50,22 @@ NAV_ITEMS = [
 ]
 
 
+SYSTEM_CARDS = [
+    ("01", "القيادة التنفيذية", "يعمل", "/admin/company/brief", "الملخص التنفيذي، الأولويات، القرارات والموافقات."),
+    ("02", "التقارير ومركز البيانات", "يعمل جزئيًا", "/admin/company/analytics", "بيانات سلة والقسائم والمصادر المتصلة؛ Google ينتظر الربط."),
+    ("03", "السوق والمنافسون", "يعمل جزئيًا", "/admin/company/competitors", "قائمة المنافسين والرادار؛ الإدخال التلقائي الكامل إلى Data Hub قيد الاستكمال."),
+    ("04", "المنتجات والأسعار", "يعمل جزئيًا", "/admin/company/products", "بيانات المنتجات المرصودة والفرص؛ نطاقات السوق والهامش قيد التوسعة."),
+    ("05", "الشركاء والتجار", "يعمل", "/admin/company/hunter", "Merchant Hunter + Supplier Hunter + Pipeline وموافقات التواصل."),
+    ("06", "النمو والمبيعات", "يعمل جزئيًا", "/admin/company/analytics", "Orders وRevenue وAOV؛ التحويل والاحتفاظ ينتظران مصادر إضافية."),
+    ("07", "عمليات المتجر", "يعمل جزئيًا", "/admin/company/store-ops", "مشاكل العرض والكتالوج من البيانات المتصلة؛ القراءة الكاملة تنتظر Salla OAuth."),
+    ("08", "SEO وGoogle", "بانتظار الربط", "/admin/company/seo", "Search Console وGA4 غير مربوطين بعد."),
+    ("09", "البراند والاستوديو الإبداعي", "هيكل جاهز", "/admin/company/brand", "الهوية، صور المنتجات، البنرات والأصول الإبداعية."),
+    ("10", "السوشيال وتوليد الطلب", "هيكل جاهز", "/admin/company/social", "المحتوى والحملات وربط الأداء بالمبيعات بعد ربط مصادره."),
+    ("11", "القسائم ودورة العميل", "يعمل جزئيًا", "/admin/company/crm", "Voucher + QR + WhatsApp تعمل؛ Retention وRepeat Customer قيد الاستكمال."),
+    ("12", "التقنية والأمان", "يعمل جزئيًا", "/admin/company/technology", "Google VM، PostgreSQL، المراقبة والنسخ الاحتياطي؛ Security Watch يتوسع تدريجيًا."),
+]
+
+
 V2_CSS = r"""
 :root{--pak:#0d47d9;--pak2:#052c9e;--ink:#10233f;--muted:#71809b;--line:#dce6f7;--soft:#f6f9ff;--ok:#07965c;--warn:#ee8b12;--bad:#d73535}
 body{background:#f5f8ff!important;color:var(--ink);font-family:Arial,Tahoma,sans-serif!important}
@@ -60,6 +77,7 @@ body{background:#f5f8ff!important;color:var(--ink);font-family:Arial,Tahoma,sans
 .ai-workspace{direction:rtl;min-width:0}.ai-top{height:72px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 22px;position:sticky;top:0;z-index:4}.ai-top-title{font-size:20px;font-weight:900;color:#0b2d75}.ai-top-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.ai-pill{border:1px solid var(--line);background:#fff;padding:8px 11px;border-radius:10px;font-size:12px;font-weight:800;color:#39506e}.ai-live{color:var(--ok);background:#ecfbf4}.ai-run{background:linear-gradient(135deg,#174ee9,#0638c4);color:#fff;border:0;border-radius:11px;padding:11px 17px;font-weight:900;cursor:pointer;box-shadow:0 7px 18px rgba(13,71,217,.22)}
 .ai-workspace .wrap{width:100%!important;max-width:none!important;padding:20px 22px!important;margin:0!important}.topbar{display:none!important}
 .ai-dashboard{display:grid;gap:14px}.ai-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.ai-kpi{background:#fff;border:1px solid var(--line);border-radius:15px;padding:17px;min-height:118px;box-shadow:0 8px 26px rgba(27,54,124,.06);position:relative}.ai-kpi .label{color:#405274;font-weight:800;font-size:14px}.ai-kpi .value{font-size:34px;font-weight:950;color:#082d79;margin-top:12px;line-height:1}.ai-kpi .sub{margin-top:8px;font-size:12px;color:var(--muted)}.ai-kpi.clickable:hover{border-color:#9eb9f4;transform:translateY(-1px)}
+.ai-readiness{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:#eef4ff;border:1px solid #cfddfb;border-radius:13px;padding:12px 15px}.ai-readiness strong{color:#0b3a9c}.ai-readiness .meta{font-size:12px;color:#405274;font-weight:800}.ai-readiness .explain{font-size:12px;color:var(--muted)}
 .ai-two{display:grid;grid-template-columns:1.05fr 1fr;gap:12px}.ai-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.ai-three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ai-panel{background:#fff;border:1px solid var(--line);border-radius:15px;padding:17px;box-shadow:0 8px 26px rgba(27,54,124,.055);min-width:0}.ai-panel h2{font-size:17px;margin:0 0 12px;color:#0e347e}.ai-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.ai-panel-head h2{margin:0}.ai-link{font-size:12px;color:var(--pak);font-weight:900}.ai-list{display:grid;gap:9px}.ai-list-item{display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.6}.ai-dot{width:8px;height:8px;border-radius:50%;background:var(--pak);margin-top:7px;flex:0 0 auto}.ai-stat-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #edf2fb;font-size:13px}.ai-stat-row:last-child{border-bottom:0}.ai-number{font-weight:950;color:#0d3b99}.ai-empty{padding:13px;border:1px dashed #d6e1f4;border-radius:10px;color:var(--muted);font-size:13px;text-align:center;background:#fbfdff}.ai-status{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900}.ai-status.ok{background:#e9f9f1;color:#087a4d}.ai-status.pending{background:#fff5df;color:#a76500}.ai-status.bad{background:#ffeded;color:#b22424}.ai-approval{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 0;border-bottom:1px solid #edf2fb}.ai-approval:last-child{border-bottom:0}.ai-approval-title{font-size:13px;font-weight:800}.ai-approval-meta{font-size:11px;color:var(--muted);margin-top:4px}.ai-approval-actions{display:flex;gap:6px;align-items:center}.ai-small-btn{border:0;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:900;cursor:pointer}.ai-small-btn.primary{background:var(--pak);color:#fff}.ai-small-btn.ghost{background:#edf3ff;color:#1f4fc2}.ai-card-icon{width:36px;height:36px;border-radius:10px;background:#eaf1ff;display:grid;place-items:center;color:#174ed0;font-size:18px;font-weight:900;margin-bottom:10px}.ai-big{font-size:25px;font-weight:950;color:#0c3da5}.ai-note{font-size:12px;color:var(--muted);line-height:1.55;margin-top:6px}.ai-map{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}.ai-map a{border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 7px;text-align:center;font-size:11px;font-weight:900;color:#153e98}.ai-map a:hover{background:#eef4ff}.ai-section-title{font-size:13px;color:#51617d;font-weight:900;margin:2px 0 -4px}.ai-wait{font-size:22px!important;line-height:1.15!important}.ai-about-hero{background:linear-gradient(135deg,#fafdff,#edf4ff);border:1px solid #d7e4fb;border-radius:20px;padding:28px;display:grid;grid-template-columns:1.25fr .75fr;gap:22px;align-items:center}.ai-about-hero h1{font-size:38px;margin:0 0 8px;color:#0a3caf}.ai-about-hero p{line-height:1.9;color:#334a70}.ai-about-badge{padding:22px;border-radius:18px;background:linear-gradient(135deg,#0c4ee8,#052f9e);color:#fff;text-align:center;font-size:28px;font-weight:950}.ai-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;align-items:center}.ai-flow>div{background:#fff;border:1px solid var(--line);border-radius:13px;padding:15px;text-align:center;font-weight:900;color:#17469e}.ai-flow .arrow{border:0;background:transparent;font-size:24px;padding:0}.ai-simple-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ai-info{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px}.ai-info h3{margin:0 0 7px;color:#103d9d}.ai-info p{margin:0;color:var(--muted);font-size:13px;line-height:1.7}
 @media(max-width:1100px){.ai-four{grid-template-columns:repeat(2,1fr)}.ai-three{grid-template-columns:1fr 1fr}.ai-map{grid-template-columns:repeat(4,1fr)}}
 @media(max-width:850px){.ai-layout{grid-template-columns:1fr}.ai-sidebar{position:relative;height:auto}.ai-nav{grid-template-columns:repeat(2,1fr)}.ai-workspace{min-width:0}.ai-top{position:relative;height:auto}.ai-kpis,.ai-two,.ai-four,.ai-three,.ai-simple-grid,.ai-about-hero{grid-template-columns:1fr}.ai-map{grid-template-columns:repeat(2,1fr)}.ai-flow{grid-template-columns:1fr}.ai-flow .arrow{transform:rotate(90deg)}.ai-workspace .wrap{padding:14px!important}}
@@ -190,9 +208,11 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
     whats_state = _source_state(db, "WhatsLoop")
     salla_state = _source_state(db, "Salla Webhooks")
     connected = len([s for s in [whats_state, salla_state, _source_state(db, "Google Compute Engine"), _source_state(db, "PostgreSQL")] if s in {"Connected", "Readable", "Writable"}])
+    readiness = summarize_system_statuses(card[2] for card in SYSTEM_CARDS)
 
     brief_items = [
-        f"صحة الشركة الحالية {_format_score(snapshot['overall_score'])}/100 والتقنية {_format_score(snapshot['technology_score'])}/100.",
+        f"الصحة التشغيلية الحالية {_format_score(snapshot['overall_score'])}/100 والتقنية {_format_score(snapshot['technology_score'])}/100.",
+        f"اكتمال الأنظمة: {readiness['complete']}/{readiness['total']} مكتمل · {readiness['partial']} تشغيل جزئي · {readiness['pending']} بانتظار ربط أو استكمال.",
         f"{new_opps} فرص جديدة · {pending_approvals} قرارات تحتاج موافقة · {open_alerts} تنبيهات مفتوحة.",
         f"{orders} طلبات مرصودة من أحداث سلة · {snapshot['vouchers']['total']} قسائم إجمالية.",
         ("Google Analytics وSearch Console بانتظار الربط؛ لذلك لا نعرض أرقام زيارات أو SEO غير حقيقية." if ga_state == "Needs Integration" or seo_state == "Needs Integration" else "مصادر Google متصلة ويمكن استخدامها في التحليل."),
@@ -203,10 +223,15 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
     <main class='wrap'>
       <div class='ai-dashboard'>
         <div class='ai-kpis'>
-          {_kpi('صحة الشركة', f"{_format_score(snapshot['overall_score'])}/100", f"التقنية {_format_score(snapshot['technology_score'])}/100")}
+          {_kpi('الصحة التشغيلية', f"{_format_score(snapshot['overall_score'])}/100", f"التقنية {_format_score(snapshot['technology_score'])}/100 · Health للتشغيل فقط")}
           {_kpi('الطلبات', str(orders), 'طلبات مرصودة من أحداث سلة', '/admin/company/salla')}
           {_kpi('الزيارات', 'بانتظار الربط' if ga_state == 'Needs Integration' else 'متصل', 'Google Analytics', '/admin/company/visits', ga_state == 'Needs Integration')}
           {_kpi('الفرص الجديدة', str(new_opps), 'اضغط لعرض الفرص والإسناد', '/admin/company/opportunities')}
+        </div>
+
+        <div class='ai-readiness'>
+          <div><strong>اكتمال الأنظمة الـ{readiness['total']}: {readiness['complete']}/{readiness['total']} مكتمل</strong><div class='meta'>{readiness['partial']} تشغيل جزئي · {readiness['pending']} بانتظار ربط أو استكمال</div></div>
+          <div class='explain'>درجة الصحة التشغيلية تقيس التقنية والقسائم فقط، ولا تمثل نسبة اكتمال شركة Pakgat AI.</div>
         </div>
 
         <div class='ai-two'>
@@ -279,23 +304,9 @@ def systems_page_v2(request: Request, db: Session = Depends(core.get_db)):
     redirect = _admin_redirect(request)
     if redirect:
         return redirect
-    cards = [
-        ("01", "القيادة التنفيذية", "يعمل", "/admin/company/brief", "الملخص التنفيذي، الأولويات، القرارات والموافقات."),
-        ("02", "التقارير ومركز البيانات", "يعمل جزئيًا", "/admin/company/analytics", "بيانات سلة والقسائم والمصادر المتصلة؛ Google ينتظر الربط."),
-        ("03", "السوق والمنافسون", "يعمل جزئيًا", "/admin/company/competitors", "قائمة المنافسين والرادار؛ الإدخال التلقائي الكامل إلى Data Hub قيد الاستكمال."),
-        ("04", "المنتجات والأسعار", "يعمل جزئيًا", "/admin/company/products", "بيانات المنتجات المرصودة والفرص؛ نطاقات السوق والهامش قيد التوسعة."),
-        ("05", "الشركاء والتجار", "يعمل", "/admin/company/hunter", "Merchant Hunter + Supplier Hunter + Pipeline وموافقات التواصل."),
-        ("06", "النمو والمبيعات", "يعمل جزئيًا", "/admin/company/analytics", "Orders وRevenue وAOV؛ التحويل والاحتفاظ ينتظران مصادر إضافية."),
-        ("07", "عمليات المتجر", "يعمل جزئيًا", "/admin/company/store-ops", "مشاكل العرض والكتالوج من البيانات المتصلة؛ القراءة الكاملة تنتظر Salla OAuth."),
-        ("08", "SEO وGoogle", "بانتظار الربط", "/admin/company/seo", "Search Console وGA4 غير مربوطين بعد."),
-        ("09", "البراند والاستوديو الإبداعي", "هيكل جاهز", "/admin/company/brand", "الهوية، صور المنتجات، البنرات والأصول الإبداعية."),
-        ("10", "السوشيال وتوليد الطلب", "هيكل جاهز", "/admin/company/social", "المحتوى والحملات وربط الأداء بالمبيعات بعد ربط مصادره."),
-        ("11", "القسائم ودورة العميل", "يعمل جزئيًا", "/admin/company/crm", "Voucher + QR + WhatsApp تعمل؛ Retention وRepeat Customer قيد الاستكمال."),
-        ("12", "التقنية والأمان", "يعمل جزئيًا", "/admin/company/technology", "Google VM، PostgreSQL، المراقبة والنسخ الاحتياطي؛ Security Watch يتوسع تدريجيًا."),
-    ]
     cards_html = "".join(
         f"<a class='ai-info' href='{url}'><span class='ai-status {'ok' if 'يعمل' in status and 'جزئي' not in status else 'pending'}'>{core.esc(num)} · {core.esc(status)}</span><h3>{core.esc(name)}</h3><p>{core.esc(detail)}</p><div class='ai-link' style='margin-top:10px'>دخول القسم ←</div></a>"
-        for num, name, status, url, detail in cards
+        for num, name, status, url, detail in SYSTEM_CARDS
     )
     body = f"<main class='wrap'><div class='ai-panel-head'><div><h1 style='margin:0;color:#0b3a9c'>أنظمة شركة بكجات الذكية</h1><p class='muted'>الخريطة الواضحة للـ12 قسمًا — بدون مصطلحات تقنية مبهمة.</p></div><a class='ai-link' href='/admin/company'>العودة للرئيسية</a></div><div class='ai-simple-grid'>{cards_html}</div></main>"
     return HTMLResponse(core.page_shell("أنظمة شركة بكجات الذكية", body, admin=True))
