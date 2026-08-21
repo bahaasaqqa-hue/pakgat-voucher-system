@@ -36,14 +36,35 @@ class UnifiedAdminThemeTests(unittest.TestCase):
         rendered = apply_admin_theme("<html><head><title>X</title></head><body>X</body></html>", "/admin/audit", LOGO)
         self.assertIn("data-nav-key='audit' class='ua-nav-link active'", rendered)
 
-    def test_ai_company_page_is_not_double_wrapped(self):
-        html = """<html><head><title>AI | Pakgat</title></head><body><div class='ai-layout'><aside class='ai-sidebar'>AI NAV</aside><section class='ai-workspace'><div class='ai-top'>TOP</div><main>Mission Control</main></section></div></body></html>"""
-        rendered = apply_admin_theme(html, "/admin/company", LOGO)
+    def test_ai_company_page_keeps_one_layout_without_global_top_strip(self):
+        html = """<html><head><title>AI | Pakgat</title></head><body><div class='ai-layout'><aside class='ai-sidebar'><div class='ai-logo'><strong>بكجات AI</strong><span>قديم</span></div><nav class='ai-nav'><a class='active' href='/admin/company/products'>المنتجات والأسعار</a></nav></aside><section class='ai-workspace'><div class='ai-top'><div class='ai-top-title'>Pakgat AI Control Center</div><div class='ai-top-actions'><a class='ai-pill' href='/admin'>← رجوع إلى لوحة الإدارة</a></div></div><main>Products</main></section></div></body></html>"""
+        rendered = apply_admin_theme(html, "/admin/company/products", LOGO)
         self.assertIn("data-unified-admin-theme='ai'", rendered)
         self.assertEqual(rendered.count("class='ai-layout'"), 1)
         self.assertNotIn("class='ua-shell'", rendered)
-        self.assertIn("class='ua-ai-global'", rendered)
-        self.assertIn("Mission Control", rendered)
+        self.assertNotIn("class='ua-ai-global'", rendered)
+        self.assertNotIn("← رجوع إلى لوحة الإدارة", rendered)
+        self.assertIn("class='ua-ai-admin-return'", rendered)
+        self.assertIn("href='/admin'", rendered)
+        self.assertIn("العودة إلى لوحة الإدارة", rendered)
+        self.assertIn("class='ua-ai-company-brand'", rendered)
+        self.assertIn(LOGO, rendered)
+        self.assertIn("Products", rendered)
+
+    def test_ai_company_unified_css_overrides_legacy_blue_sidebar(self):
+        html = """<html><head><title>AI | Pakgat</title></head><body><div class='ai-layout'><aside class='ai-sidebar'><nav class='ai-nav'></nav></aside><section class='ai-workspace'><div class='ai-top'>TOP</div></section></div></body></html>"""
+        rendered = apply_admin_theme(html, "/admin/company/opportunities", LOGO)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-sidebar{background:linear-gradient(180deg,var(--ua-navy)", rendered)
+        self.assertIn("top:0!important;height:100vh!important", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-nav a.active", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-top{top:0!important", rendered)
+
+    def test_ai_company_theme_is_idempotent(self):
+        html = """<html><head><title>AI</title></head><body><div class='ai-layout'><aside class='ai-sidebar'><nav class='ai-nav'></nav></aside><section class='ai-workspace'>X</section></div></body></html>"""
+        once = apply_admin_theme(html, "/admin/company/seo", LOGO)
+        twice = apply_admin_theme(once, "/admin/company/seo", LOGO)
+        self.assertEqual(once, twice)
+        self.assertEqual(once.count("ua-ai-admin-return"), 1)
 
     def test_login_is_branded_without_authenticated_sidebar(self):
         html = "<html><head><title>تسجيل الدخول | Pakgat</title></head><body><main><form><input name='username'></form></main></body></html>"
