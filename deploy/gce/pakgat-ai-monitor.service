@@ -1,0 +1,19 @@
+[Unit]
+Description=Pakgat AI Company monitor
+After=network-online.target postgresql.service pakgat-voucher.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pakgat
+Group=pakgat
+WorkingDirectory=/opt/pakgat-voucher-system
+EnvironmentFile=/etc/pakgat/pakgat.env
+ExecStart=/opt/pakgat-voucher-system/.venv/bin/python -m app.ai_monitor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
