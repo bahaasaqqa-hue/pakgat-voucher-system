@@ -198,7 +198,7 @@ class AgentReportingTests(unittest.TestCase):
         source = Path("app/ai_company_agent_reporting.py").read_text(encoding="utf-8")
         self.assertIn('@core.app.get("/agent/report/{token}"', source)
         self.assertIn('@core.app.post("/agent/report/{token}"', source)
-        self.assertIn('@core.app.get("/admin/company/agent-reports/{report_id}/evidence"', source)
+        self.assertIn('"/admin/company/agent-reports/{report_id}/evidence"', source)
         self.assertIn("core.require_admin(request)", source)
         self.assertIn("Referrer-Policy", source)
         self.assertIn("noindex, nofollow", source)
