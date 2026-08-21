@@ -103,6 +103,13 @@ def _status_ar(value: str) -> str:
     }.get(value, value)
 
 
+def _format_score(value) -> str:
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _nav_html(path: str) -> str:
     links = []
     for label, href, icon in NAV_ITEMS:
@@ -117,6 +124,7 @@ def _layout_wrap(html: str, path: str) -> str:
     # Remove the legacy voucher header from AI Company pages only.
     html = re.sub(r"<header class='topbar'>.*?</header>", "", html, count=1, flags=re.DOTALL)
     now = datetime.now(SAUDI_TZ)
+    back_link = "<a class='ai-pill' href='/admin'>← رجوع إلى لوحة الإدارة</a>" if path.rstrip("/") == "/admin/company" else ""
     top = f"""
     <div class='ai-layout' data-pakgat-ai-v2='1'>
       <aside class='ai-sidebar'>
@@ -128,6 +136,7 @@ def _layout_wrap(html: str, path: str) -> str:
         <div class='ai-top'>
           <div class='ai-top-title'>Pakgat AI Control Center</div>
           <div class='ai-top-actions'>
+            {back_link}
             <span class='ai-pill ai-live'>● مباشر</span>
             <span class='ai-pill'>⌖ السعودية</span>
             <span class='ai-pill'>{now.strftime('%Y-%m-%d · %H:%M')}</span>
@@ -183,7 +192,7 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
     connected = len([s for s in [whats_state, salla_state, _source_state(db, "Google Compute Engine"), _source_state(db, "PostgreSQL")] if s in {"Connected", "Readable", "Writable"}])
 
     brief_items = [
-        f"صحة الشركة الحالية {snapshot['overall_score']}/100 والتقنية {snapshot['technology_score']}/100.",
+        f"صحة الشركة الحالية {_format_score(snapshot['overall_score'])}/100 والتقنية {_format_score(snapshot['technology_score'])}/100.",
         f"{new_opps} فرص جديدة · {pending_approvals} قرارات تحتاج موافقة · {open_alerts} تنبيهات مفتوحة.",
         f"{orders} طلبات مرصودة من أحداث سلة · {snapshot['vouchers']['total']} قسائم إجمالية.",
         ("Google Analytics وSearch Console بانتظار الربط؛ لذلك لا نعرض أرقام زيارات أو SEO غير حقيقية." if ga_state == "Needs Integration" or seo_state == "Needs Integration" else "مصادر Google متصلة ويمكن استخدامها في التحليل."),
@@ -194,7 +203,7 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
     <main class='wrap'>
       <div class='ai-dashboard'>
         <div class='ai-kpis'>
-          {_kpi('صحة الشركة', f"{snapshot['overall_score']}/100", f"التقنية {snapshot['technology_score']}/100")}
+          {_kpi('صحة الشركة', f"{_format_score(snapshot['overall_score'])}/100", f"التقنية {_format_score(snapshot['technology_score'])}/100")}
           {_kpi('الطلبات', str(orders), 'طلبات مرصودة من أحداث سلة', '/admin/company/salla')}
           {_kpi('الزيارات', 'بانتظار الربط' if ga_state == 'Needs Integration' else 'متصل', 'Google Analytics', '/admin/company/visits', ga_state == 'Needs Integration')}
           {_kpi('الفرص الجديدة', str(new_opps), 'اضغط لعرض الفرص والإسناد', '/admin/company/opportunities')}

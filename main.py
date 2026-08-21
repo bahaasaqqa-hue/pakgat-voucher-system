@@ -25,21 +25,4 @@ from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F40
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company, import LAST
 
-
-_original_ai_company_layout_wrap = _ai_company_dashboard_v2._layout_wrap
-
-
-def _admin_company_layout_wrap(html: str, path: str) -> str:
-    html = _original_ai_company_layout_wrap(html, path)
-    if path.rstrip("/") != "/admin/company":
-        return html
-
-    html = html.replace("100.0/100", "100/100")
-    marker = "<div class='ai-top-actions'>"
-    back_link = "<a class='ai-pill' href='/admin'>← رجوع إلى لوحة الإدارة</a>"
-    return html.replace(marker, marker + back_link, 1)
-
-
-_ai_company_dashboard_v2._layout_wrap = _admin_company_layout_wrap
-
 __all__ = ["app"]
