@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.ai_company_mission_control import (
     approval_weight,
@@ -50,6 +51,42 @@ class MissionControlTests(unittest.TestCase):
         now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
         self.assertEqual(freshness_label(now - timedelta(minutes=8), now), "منذ 8 د")
         self.assertEqual(freshness_label(None, now), "—")
+
+    def test_mission_control_ui_contains_required_sections(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        for marker in (
+            "AI Command Bar",
+            "AI Core",
+            "Situation Room",
+            "Decision Matrix",
+            "Opportunity Matrix",
+            "Activity Rail",
+        ):
+            self.assertIn(marker, source)
+
+    def test_mission_control_ui_has_protected_command_endpoint(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        self.assertIn('@core.app.post("/admin/company/command")', source)
+        self.assertIn("action='/admin/company/command'", source)
+        self.assertIn("_admin_redirect(request)", source)
+
+    def test_mission_control_visual_system_has_required_css_hooks(self):
+        source = Path("app/ai_company_mission_control_ui.py").read_text(encoding="utf-8")
+        for marker in (
+            "@keyframes aiCorePulse",
+            ".mc-command",
+            ".mc-situation",
+            ".mc-matrix",
+            ".mc-activity",
+        ):
+            self.assertIn(marker, source)
+
+    def test_main_imports_mission_control_before_corporate_bridge(self):
+        source = Path("main.py").read_text(encoding="utf-8")
+        mission_pos = source.find("ai_company_mission_control_ui")
+        corporate_pos = source.find("corporate_ai_bridge")
+        self.assertGreaterEqual(mission_pos, 0)
+        self.assertGreater(corporate_pos, mission_pos)
 
 
 if __name__ == "__main__":
