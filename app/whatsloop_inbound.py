@@ -1,28 +1,26 @@
 from __future__ import annotations
 
-import hmac
+from base64 import b64decode
 import json
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
-from app.whatsloop_inbound_core import (
-    InboundEvent,
-    derive_webhook_token,
-    normalize_inbound_event,
-    should_send_shaty_test_reply,
-)
+from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
+from app.jood_identity import JOOD_ROLE_AR, JOOD_TEST_REPLY, should_jood_test_reply
+from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
+from app.whatsloop_security import current_webhook_token, webhook_token_is_valid
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
-SHATY_TEST_REPLY = "✅ وصلتني رسالتك من واتساب داخل نفس الجروب. شاتي معك الآن."
+_JOOD_AVATAR_BYTES = b64decode(JOOD_AVATAR_WEBP_BASE64)
 
 
 class WhatsLoopInboundEvent(core.Base):
@@ -44,12 +42,11 @@ class WhatsLoopInboundEvent(core.Base):
 
 
 def _expected_token() -> str:
-    return derive_webhook_token(core.ADMIN_SECRET)
+    return current_webhook_token(core.ADMIN_SECRET)
 
 
 def _token_ok(value: str) -> bool:
-    expected = _expected_token()
-    return bool(value and expected and hmac.compare_digest(value, expected))
+    return webhook_token_is_valid(value, core.ADMIN_SECRET)
 
 
 def _mask_jid(value: Optional[str]) -> str:
@@ -82,7 +79,7 @@ def _display_fields(row: WhatsLoopInboundEvent) -> tuple[Optional[int], Optional
     )
 
 
-def _send_shaty_test_reply(event: InboundEvent) -> tuple[bool, str]:
+def _send_jood_test_reply(event: InboundEvent) -> tuple[bool, str]:
     if not core.WHATSLOOP_API_BASE_URL or not core.WHATSLOOP_API_TOKEN:
         return False, "WhatsLoop configuration is missing"
     if event.channel_id is None or not event.chat_id or not event.message_id:
@@ -92,7 +89,7 @@ def _send_shaty_test_reply(event: InboundEvent) -> tuple[bool, str]:
         {
             "channel_id": event.channel_id,
             "to": event.chat_id,
-            "message": SHATY_TEST_REPLY,
+            "message": JOOD_TEST_REPLY,
             "quoted_message_id": event.message_id,
         },
         ensure_ascii=False,
@@ -117,6 +114,15 @@ def _send_shaty_test_reply(event: InboundEvent) -> tuple[bool, str]:
         return False, f"HTTP {exc.code}: {text[:300]}"
     except (URLError, TimeoutError, OSError) as exc:
         return False, f"{type(exc).__name__}: {str(exc)[:300]}"
+
+
+@core.app.get("/admin/company/jood/avatar", include_in_schema=False)
+def jood_avatar():
+    return Response(
+        content=_JOOD_AVATAR_BYTES,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @core.app.post("/webhooks/whatsloop/{token}")
@@ -168,13 +174,13 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
     if (
         normalized.event_type == "message.received"
         and normalized.from_me is not True
-        and should_send_shaty_test_reply(normalized.text, normalized.chat_id)
+        and should_jood_test_reply(normalized.text, normalized.chat_id)
     ):
-        ok, provider_status = _send_shaty_test_reply(normalized)
+        ok, provider_status = _send_jood_test_reply(normalized)
         reply_status = "sent" if ok else "failed"
         core.log_event(
             db,
-            "shaty_whatsloop_reply_sent" if ok else "shaty_whatsloop_reply_failed",
+            "jood_whatsloop_reply_sent" if ok else "jood_whatsloop_reply_failed",
             details=(
                 f"channel={normalized.channel_id or '-'}; group={_mask_jid(normalized.chat_id)}; "
                 f"provider={provider_status[:250]}"
@@ -192,6 +198,7 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
         core.require_admin(request)
     except HTTPException:
         from fastapi.responses import RedirectResponse
+
         return RedirectResponse("/admin/login", status_code=303)
 
     callback_url = f"{core.BASE_URL}/webhooks/whatsloop/{_expected_token()}"
@@ -221,14 +228,25 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
 
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
-      <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
-        <div><h1 style='margin-bottom:4px'>Shaty · WhatsLoop Inbox</h1>
-        <p class='muted'>استقبال آمن لأحداث WhatsLoop داخل Pakgat AI Company.</p></div>
-        <a class='btn btn-muted' href='/admin/company'>AI Company</a>
-      </div>
+      <section class='card' style='padding:18px 22px;margin-bottom:18px;display:grid;grid-template-columns:120px minmax(0,1fr);gap:20px;align-items:center'>
+        <img src='/admin/company/jood/avatar' alt='جود من بكجات' style='display:block;width:112px;height:150px;object-fit:cover;object-position:50% 12%;border-radius:18px;background:#eff6ff;border:1px solid #dbeafe'>
+        <div>
+          <div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>
+            <div><h1 style='margin:0 0 5px'>جود · واتساب العملاء</h1>
+            <p class='muted' style='margin:0'>{core.esc(JOOD_ROLE_AR)} عبر WhatsLoop.</p></div>
+            <a class='btn btn-muted' href='/admin/company'>مركز التحكم</a>
+          </div>
+          <div style='display:flex;gap:7px;flex-wrap:wrap;margin-top:12px'>
+            <span class='badge badge-active'>خدمة العملاء</span>
+            <span class='badge badge-active'>المبيعات</span>
+            <span class='badge badge-active'>التجار</span>
+          </div>
+          <p class='muted' style='margin:12px 0 0'>شاتي يبقى المساعد التنفيذي الداخلي لبهاء؛ جود هي الواجهة الخارجية لبكجات.</p>
+        </div>
+      </section>
       <section class='card' style='padding:22px;margin:18px 0'>
-        <h2>Webhook URL</h2>
-        <p class='muted'>انسخ هذا الرابط إلى إعداد Webhook في WhatsLoop. يحتوي الرابط على مفتاح مشتق ولا يكشف ADMIN_SECRET.</p>
+        <h2>رابط Webhook الجديد</h2>
+        <p class='muted'>هذا رابط مُدوّر جديد. الرابط السابق سيبقى مقبولًا مؤقتًا حتى يتم تحديث WhatsLoop، لذلك لن تنقطع الرسائل أثناء الانتقال.</p>
         <input class='input' dir='ltr' readonly value='{core.esc(callback_url)}'>
       </section>
       <section class='card' style='padding:22px'>
@@ -237,4 +255,4 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
       </section>
     </main>
     """
-    return HTMLResponse(core.page_shell("Shaty WhatsLoop", body, admin=True))
+    return HTMLResponse(core.page_shell("جود | واتساب العملاء", body, admin=True))
