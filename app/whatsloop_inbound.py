@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from base64 import b64decode
 import json
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
@@ -17,10 +19,11 @@ from app import application as core
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
 from app.jood_identity import JOOD_ROLE_AR, JOOD_TEST_REPLY, should_jood_test_reply
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
-from app.whatsloop_security import current_webhook_token, webhook_token_is_valid
+from app.whatsloop_security import current_webhook_token, verify_hmac_sha256_hex, webhook_token_is_valid
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
 _JOOD_AVATAR_BYTES = b64decode(JOOD_AVATAR_WEBP_BASE64)
+WHATSLOOP_WEBHOOK_SECRET_FILE = "/etc/pakgat/whatsloop_webhook_secret"
 
 
 class WhatsLoopInboundEvent(core.Base):
@@ -47,6 +50,17 @@ def _expected_token() -> str:
 
 def _token_ok(value: str) -> bool:
     return webhook_token_is_valid(value, core.ADMIN_SECRET)
+
+
+def _load_whatsloop_webhook_secret() -> str:
+    """Load the signing secret without logging it or placing it in source code."""
+    value = os.getenv("WHATSLOOP_WEBHOOK_SECRET", "").strip()
+    if value:
+        return value
+    try:
+        return Path(WHATSLOOP_WEBHOOK_SECRET_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _mask_jid(value: Optional[str]) -> str:
@@ -133,6 +147,16 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
     raw = await request.body()
     if len(raw) > MAX_WEBHOOK_BYTES:
         raise HTTPException(status_code=413, detail="Payload too large")
+
+    signing_secret = _load_whatsloop_webhook_secret()
+    signature = request.headers.get("x-webhook-signature", "")
+    if not signature:
+        hmac_probe = "signature-missing"
+    elif not signing_secret:
+        hmac_probe = "secret-missing"
+    else:
+        hmac_probe = "match" if verify_hmac_sha256_hex(raw, signature, signing_secret) else "mismatch"
+    core.log_event(db, "whatsloop_hmac_probe", details=f"x-webhook-signature={hmac_probe}")
 
     try:
         payload = json.loads(raw.decode("utf-8"))
