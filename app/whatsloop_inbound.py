@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from base64 import b64decode
 import json
 import os
@@ -16,8 +17,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
+from app.jood_ai import JoodAIError, generate_jood_reply
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
-from app.jood_identity import JOOD_ROLE_AR, JOOD_TEST_REPLY, should_jood_test_reply
+from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
@@ -93,17 +95,19 @@ def _display_fields(row: WhatsLoopInboundEvent) -> tuple[Optional[int], Optional
     )
 
 
-def _send_jood_test_reply(event: InboundEvent) -> tuple[bool, str]:
+def _send_jood_reply(event: InboundEvent, message: str) -> tuple[bool, str]:
     if not core.WHATSLOOP_API_BASE_URL or not core.WHATSLOOP_API_TOKEN:
         return False, "WhatsLoop configuration is missing"
     if event.channel_id is None or not event.chat_id or not event.message_id:
         return False, "Missing channel/chat/message id"
+    if not message.strip():
+        return False, "Empty reply"
 
     body = json.dumps(
         {
             "channel_id": event.channel_id,
             "to": event.chat_id,
-            "message": JOOD_TEST_REPLY,
+            "message": message.strip(),
             "quoted_message_id": event.message_id,
         },
         ensure_ascii=False,
@@ -178,7 +182,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
         db.refresh(row)
     except IntegrityError:
         db.rollback()
-        return JSONResponse({"success": True, "duplicate": True, "test_reply": "skipped"})
+        return JSONResponse({"success": True, "duplicate": True, "jood_reply": "skipped"})
 
     core.log_event(
         db,
@@ -193,21 +197,44 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
     if (
         normalized.event_type == "message.received"
         and normalized.from_me is not True
-        and should_jood_test_reply(normalized.text, normalized.chat_id)
+        and should_jood_ai_reply(normalized.text, normalized.chat_id)
     ):
-        ok, provider_status = _send_jood_test_reply(normalized)
-        reply_status = "sent" if ok else "failed"
-        core.log_event(
-            db,
-            "jood_whatsloop_reply_sent" if ok else "jood_whatsloop_reply_failed",
-            details=(
-                f"channel={normalized.channel_id or '-'}; group={_mask_jid(normalized.chat_id)}; "
-                f"provider={provider_status[:250]}"
-            ),
-        )
+        try:
+            generated_reply = await asyncio.to_thread(generate_jood_reply, normalized.text or "")
+        except JoodAIError as exc:
+            reply_status = "ai_failed"
+            core.log_event(
+                db,
+                "jood_ai_generation_failed",
+                details=(
+                    f"channel={normalized.channel_id or '-'}; chat={_mask_jid(normalized.chat_id)}; "
+                    f"error={str(exc)[:160]}"
+                ),
+            )
+        except Exception as exc:
+            reply_status = "ai_failed"
+            core.log_event(
+                db,
+                "jood_ai_generation_failed",
+                details=(
+                    f"channel={normalized.channel_id or '-'}; chat={_mask_jid(normalized.chat_id)}; "
+                    f"error_type={type(exc).__name__}"
+                ),
+            )
+        else:
+            ok, provider_status = await asyncio.to_thread(_send_jood_reply, normalized, generated_reply)
+            reply_status = "sent" if ok else "failed"
+            core.log_event(
+                db,
+                "jood_whatsloop_reply_sent" if ok else "jood_whatsloop_reply_failed",
+                details=(
+                    f"channel={normalized.channel_id or '-'}; chat={_mask_jid(normalized.chat_id)}; "
+                    f"provider={provider_status[:250]}"
+                ),
+            )
 
     return JSONResponse(
-        {"success": True, "duplicate": False, "event_id": row.id, "test_reply": reply_status}
+        {"success": True, "duplicate": False, "event_id": row.id, "jood_reply": reply_status}
     )
 
 
@@ -259,6 +286,7 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
             <span class='badge badge-active'>خدمة العملاء</span>
             <span class='badge badge-active'>المبيعات</span>
             <span class='badge badge-active'>التجار</span>
+            <span class='badge badge-active'>ذكاء اصطناعي</span>
           </div>
           <p class='muted' style='margin:12px 0 0'>شاتي يبقى المساعد التنفيذي الداخلي لبهاء؛ جود هي الواجهة الخارجية لبكجات.</p>
         </div>
