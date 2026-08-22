@@ -57,3 +57,25 @@ def signature_header_metadata(headers: Mapping[str, str]) -> list[str]:
                 break
         rows.append(f"{name}(len={len(value)},prefix={prefix})")
     return sorted(rows)
+
+
+def verify_hmac_sha256_hex(raw_body: bytes, signature: str, secret: str) -> bool:
+    """Verify a raw-body HMAC-SHA256 signature encoded as hexadecimal.
+
+    WhatsLoop's observed ``x-webhook-signature`` is 64 characters, matching a
+    SHA-256 hex digest. The optional ``sha256=`` prefix is accepted defensively.
+    No signature or secret value is returned or logged here.
+    """
+    if not signature or not secret:
+        return False
+    candidate = str(signature).strip()
+    if candidate.lower().startswith("sha256="):
+        candidate = candidate[7:]
+    if len(candidate) != 64:
+        return False
+    try:
+        int(candidate, 16)
+    except ValueError:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(candidate.lower(), expected)
