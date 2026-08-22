@@ -13,12 +13,13 @@ sudo -u pakgat git -C "$APP_DIR" checkout gce-migration
 sudo -u pakgat git -C "$APP_DIR" pull --ff-only origin gce-migration
 
 # Safety gate: do not restart the live voucher service if a newly added AI,
-# Corporate Benefits, or Salla integration module has a Python syntax error.
+# Corporate Benefits, WhatsLoop, or Salla integration module has a Python syntax error.
 sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
   "$APP_DIR/main.py" \
   "$APP_DIR/app/salla_products_read_only.py" \
   "$APP_DIR"/app/ai_company*.py \
-  "$APP_DIR"/app/corporate*.py
+  "$APP_DIR"/app/corporate*.py \
+  "$APP_DIR"/app/whatsloop_inbound*.py
 
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.service" /etc/systemd/system/pakgat-ai-monitor.service
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.timer" /etc/systemd/system/pakgat-ai-monitor.timer
