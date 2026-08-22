@@ -19,7 +19,7 @@ from app import application as core
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
 from app.jood_identity import JOOD_ROLE_AR, JOOD_TEST_REPLY, should_jood_test_reply
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
-from app.whatsloop_security import current_webhook_token, verify_hmac_sha256_hex, webhook_token_is_valid
+from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
 _JOOD_AVATAR_BYTES = b64decode(JOOD_AVATAR_WEBP_BASE64)
@@ -149,14 +149,9 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
         raise HTTPException(status_code=413, detail="Payload too large")
 
     signing_secret = _load_whatsloop_webhook_secret()
-    signature = request.headers.get("x-webhook-signature", "")
-    if not signature:
-        hmac_probe = "signature-missing"
-    elif not signing_secret:
-        hmac_probe = "secret-missing"
-    else:
-        hmac_probe = "match" if verify_hmac_sha256_hex(raw, signature, signing_secret) else "mismatch"
-    core.log_event(db, "whatsloop_hmac_probe", details=f"x-webhook-signature={hmac_probe}")
+    if not request_signature_is_valid(raw, request.headers, signing_secret):
+        core.log_event(db, "whatsloop_webhook_signature_rejected", details="invalid-or-missing-signature")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     try:
         payload = json.loads(raw.decode("utf-8"))
