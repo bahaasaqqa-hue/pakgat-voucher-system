@@ -19,6 +19,7 @@ from app import ai_company_hunter as _ai_company_hunter  # noqa: F401 - merchant
 from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - store operations quality watch
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
 from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
+from app import whatsloop_inbound as _whatsloop_inbound  # noqa: F401 - Shaty inbound WhatsLoop webhook + inbox
 from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corporate DB/admin base
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
