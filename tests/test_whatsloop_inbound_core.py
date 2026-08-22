@@ -42,3 +42,39 @@ def test_normalize_inbound_event_hashes_payload_when_message_id_missing():
     second = normalize_inbound_event(payload, raw)
     assert first.event_key == second.event_key
     assert first.event_key.startswith("sha256:")
+
+
+def test_normalize_inbound_event_extracts_real_whatsloop_data_object_shape():
+    payload = {
+        "id": "evt_trtuwjgoncr1yzyd77sv2mno",
+        "object": "event",
+        "type": "message.received",
+        "api_version": "2026-06-01",
+        "created": 1787429684,
+        "tenant_id": "32a62723-295d-4196-ac53-50ab454854fc",
+        "channel_id": None,
+        "data": {
+            "object": {
+                "message_id": "ACFF842C6A9C36B7D0BEF068A41AFABD",
+                "platform_message_id": 50796,
+                "channel_id": 5,
+                "conversation_id": 923,
+                "contact_id": None,
+                "group_id": "120363429327806767@g.us",
+                "group_jid": "120363429327806767@g.us",
+                "phone": "966504161514",
+                "type": "text",
+                "content": "مرحبا شاتي 3",
+                "timestamp": "2026-08-22T20:14:43+00:00",
+            }
+        },
+    }
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    event = normalize_inbound_event(payload, raw)
+    assert event.event_type == "message.received"
+    assert event.channel_id == 5
+    assert event.message_id == "ACFF842C6A9C36B7D0BEF068A41AFABD"
+    assert event.sender == "966504161514"
+    assert event.chat_id == "120363429327806767@g.us"
+    assert event.text == "مرحبا شاتي 3"
+    assert event.event_key == "message.received:ACFF842C6A9C36B7D0BEF068A41AFABD"

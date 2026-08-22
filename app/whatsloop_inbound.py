@@ -53,6 +53,27 @@ def _mask_jid(value: Optional[str]) -> str:
     return f"{base[:3]}***{base[-3:]}"
 
 
+def _display_fields(row: WhatsLoopInboundEvent) -> tuple[Optional[int], Optional[str], Optional[str], Optional[str]]:
+    channel_id = row.channel_id
+    sender = row.sender
+    chat_id = row.chat_id
+    text = row.text
+    if channel_id is not None and sender and chat_id and text:
+        return channel_id, sender, chat_id, text
+    try:
+        raw = row.payload_json.encode("utf-8")
+        payload = json.loads(row.payload_json)
+        normalized = normalize_inbound_event(payload, raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return channel_id, sender, chat_id, text
+    return (
+        channel_id if channel_id is not None else normalized.channel_id,
+        sender or normalized.sender,
+        chat_id or normalized.chat_id,
+        text or normalized.text,
+    )
+
+
 @core.app.post("/webhooks/whatsloop/{token}")
 async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(core.get_db)):
     if not _token_ok(token):
@@ -115,16 +136,22 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
             .limit(50)
         ).all()
     )
-    rows = "".join(
-        "<tr>"
-        f"<td>{core.esc(row.event_type)}</td>"
-        f"<td>{core.esc(row.channel_id or '—')}</td>"
-        f"<td dir='ltr'>{core.esc(_mask_jid(row.sender))}</td>"
-        f"<td>{core.esc((row.text or '—')[:240])}</td>"
-        f"<td>{core.esc(core.fmt_dt(row.received_at))}</td>"
-        "</tr>"
-        for row in events
-    ) or "<tr><td colspan='5' class='muted'>لم تصل أحداث WhatsLoop بعد.</td></tr>"
+    rendered_rows = []
+    for row in events:
+        channel_id, sender, chat_id, text = _display_fields(row)
+        channel_label = str(channel_id) if channel_id is not None else "—"
+        if chat_id:
+            channel_label += f" · {_mask_jid(chat_id)}"
+        rendered_rows.append(
+            "<tr>"
+            f"<td>{core.esc(row.event_type)}</td>"
+            f"<td dir='ltr'>{core.esc(channel_label)}</td>"
+            f"<td dir='ltr'>{core.esc(_mask_jid(sender))}</td>"
+            f"<td>{core.esc((text or '—')[:240])}</td>"
+            f"<td>{core.esc(core.fmt_dt(row.received_at))}</td>"
+            "</tr>"
+        )
+    rows = "".join(rendered_rows) or "<tr><td colspan='5' class='muted'>لم تصل أحداث WhatsLoop بعد.</td></tr>"
 
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
@@ -140,7 +167,7 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
       </section>
       <section class='card' style='padding:22px'>
         <h2>آخر 50 حدثًا</h2>
-        <div class='table-wrap'><table><thead><tr><th>الحدث</th><th>القناة</th><th>المرسل</th><th>النص</th><th>الوقت</th></tr></thead><tbody>{rows}</tbody></table></div>
+        <div class='table-wrap'><table><thead><tr><th>الحدث</th><th>القناة / الجروب</th><th>المرسل</th><th>النص</th><th>الوقت</th></tr></thead><tbody>{rows}</tbody></table></div>
       </section>
     </main>
     """
