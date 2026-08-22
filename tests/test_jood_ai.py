@@ -48,6 +48,15 @@ class JoodAITests(unittest.TestCase):
         self.assertEqual(payload["contents"][0]["role"], "user")
         self.assertEqual(payload["contents"][0]["parts"][0]["text"], "أبغى أعرف عن بكجات")
 
+    def test_vertex_prompt_contains_concrete_pakgat_business_facts(self):
+        payload = build_vertex_payload("جود، عرفيني عن بكجات بجملة واحدة")
+        system_text = payload["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("منصة سعودية", system_text)
+        self.assertIn("بكجات وكوبونات", system_text)
+        self.assertIn("الرياض", system_text)
+        self.assertIn("تجارب", system_text)
+        self.assertIn("لا تستخدمي عبارات تسويقية عامة", system_text)
+
     def test_extract_vertex_text(self):
         data = {"candidates": [{"content": {"parts": [{"text": "أهلًا"}, {"text": " بك"}]}}]}
         self.assertEqual(extract_vertex_text(data), "أهلًا بك")
