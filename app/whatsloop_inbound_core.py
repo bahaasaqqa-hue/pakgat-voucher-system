@@ -58,6 +58,15 @@ def _as_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def should_send_shaty_test_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
+    if not text or not chat_id or not chat_id.endswith("@g.us"):
+        return False
+    normalized = " ".join(text.strip().lower().split())
+    if "شاتي" not in normalized:
+        return False
+    return normalized.startswith(("الو شاتي", "ألو شاتي", "مرحبا شاتي", "هلا شاتي"))
+
+
 def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> InboundEvent:
     data = _mapping(payload.get("data"))
     obj = _mapping(data.get("object"))

@@ -1,6 +1,10 @@
 import json
 
-from app.whatsloop_inbound_core import derive_webhook_token, normalize_inbound_event
+from app.whatsloop_inbound_core import (
+    derive_webhook_token,
+    normalize_inbound_event,
+    should_send_shaty_test_reply,
+)
 
 
 def test_derive_webhook_token_is_stable_and_not_raw_secret():
@@ -78,3 +82,10 @@ def test_normalize_inbound_event_extracts_real_whatsloop_data_object_shape():
     assert event.chat_id == "120363429327806767@g.us"
     assert event.text == "مرحبا شاتي 3"
     assert event.event_key == "message.received:ACFF842C6A9C36B7D0BEF068A41AFABD"
+
+
+def test_test_reply_is_only_for_group_messages_addressing_shaty():
+    assert should_send_shaty_test_reply("الو شاتي", "120363429327806767@g.us") is True
+    assert should_send_shaty_test_reply("مرحبا شاتي 4", "120363429327806767@g.us") is True
+    assert should_send_shaty_test_reply("مرحبا", "120363429327806767@g.us") is False
+    assert should_send_shaty_test_reply("الو شاتي", "966504161514@s.whatsapp.net") is False

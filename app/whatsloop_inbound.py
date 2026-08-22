@@ -4,6 +4,8 @@ import hmac
 import json
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -12,9 +14,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
-from app.whatsloop_inbound_core import derive_webhook_token, normalize_inbound_event
+from app.whatsloop_inbound_core import (
+    InboundEvent,
+    derive_webhook_token,
+    normalize_inbound_event,
+    should_send_shaty_test_reply,
+)
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
+SHATY_TEST_REPLY = "✅ وصلتني رسالتك من واتساب داخل نفس الجروب. شاتي معك الآن."
 
 
 class WhatsLoopInboundEvent(core.Base):
@@ -74,6 +82,43 @@ def _display_fields(row: WhatsLoopInboundEvent) -> tuple[Optional[int], Optional
     )
 
 
+def _send_shaty_test_reply(event: InboundEvent) -> tuple[bool, str]:
+    if not core.WHATSLOOP_API_BASE_URL or not core.WHATSLOOP_API_TOKEN:
+        return False, "WhatsLoop configuration is missing"
+    if event.channel_id is None or not event.chat_id or not event.message_id:
+        return False, "Missing channel/chat/message id"
+
+    body = json.dumps(
+        {
+            "channel_id": event.channel_id,
+            "to": event.chat_id,
+            "message": SHATY_TEST_REPLY,
+            "quoted_message_id": event.message_id,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = UrlRequest(
+        f"{core.WHATSLOOP_API_BASE_URL}/messages/send-reply",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {core.WHATSLOOP_API_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=20) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            status_code = int(getattr(response, "status", response.getcode()))
+        return 200 <= status_code < 300, f"HTTP {status_code}: {text[:300]}"
+    except HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        return False, f"HTTP {exc.code}: {text[:300]}"
+    except (URLError, TimeoutError, OSError) as exc:
+        return False, f"{type(exc).__name__}: {str(exc)[:300]}"
+
+
 @core.app.post("/webhooks/whatsloop/{token}")
 async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(core.get_db)):
     if not _token_ok(token):
@@ -106,18 +151,39 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
     try:
         db.commit()
         db.refresh(row)
-        core.log_event(
-            db,
-            "whatsloop_webhook_received",
-            details=(
-                f"event={normalized.event_type[:80]}; channel={normalized.channel_id or '-'}; "
-                f"sender={_mask_jid(normalized.sender)}"
-            ),
-        )
-        return JSONResponse({"success": True, "duplicate": False, "event_id": row.id})
     except IntegrityError:
         db.rollback()
-        return JSONResponse({"success": True, "duplicate": True})
+        return JSONResponse({"success": True, "duplicate": True, "test_reply": "skipped"})
+
+    core.log_event(
+        db,
+        "whatsloop_webhook_received",
+        details=(
+            f"event={normalized.event_type[:80]}; channel={normalized.channel_id or '-'}; "
+            f"sender={_mask_jid(normalized.sender)}"
+        ),
+    )
+
+    reply_status = "skipped"
+    if (
+        normalized.event_type == "message.received"
+        and normalized.from_me is not True
+        and should_send_shaty_test_reply(normalized.text, normalized.chat_id)
+    ):
+        ok, provider_status = _send_shaty_test_reply(normalized)
+        reply_status = "sent" if ok else "failed"
+        core.log_event(
+            db,
+            "shaty_whatsloop_reply_sent" if ok else "shaty_whatsloop_reply_failed",
+            details=(
+                f"channel={normalized.channel_id or '-'}; group={_mask_jid(normalized.chat_id)}; "
+                f"provider={provider_status[:250]}"
+            ),
+        )
+
+    return JSONResponse(
+        {"success": True, "duplicate": False, "event_id": row.id, "test_reply": reply_status}
+    )
 
 
 @core.app.get("/admin/company/whatsloop", response_class=HTMLResponse)
