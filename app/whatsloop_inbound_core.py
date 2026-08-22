@@ -60,12 +60,16 @@ def _as_bool(value: Any) -> Optional[bool]:
 
 def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> InboundEvent:
     data = _mapping(payload.get("data"))
+    obj = _mapping(data.get("object"))
     message = _mapping(data.get("message"))
     key = _mapping(data.get("key"))
     message_key = _mapping(message.get("key"))
 
     event_type = str(_first(payload.get("event"), payload.get("type"), data.get("event"), "unknown"))
     message_id_value = _first(
+        obj.get("message_id"),
+        obj.get("messageId"),
+        obj.get("id"),
         data.get("id"),
         data.get("message_id"),
         data.get("messageId"),
@@ -81,8 +85,20 @@ def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> Inbo
     else:
         event_key = "sha256:" + hashlib.sha256(raw_body).hexdigest()
 
-    channel_id = _as_int(_first(payload.get("channel_id"), data.get("channel_id"), data.get("channelId")))
+    channel_id = _as_int(
+        _first(
+            payload.get("channel_id"),
+            obj.get("channel_id"),
+            obj.get("channelId"),
+            data.get("channel_id"),
+            data.get("channelId"),
+        )
+    )
     sender_value = _first(
+        obj.get("phone"),
+        obj.get("from"),
+        obj.get("sender"),
+        obj.get("participant"),
         data.get("from"),
         data.get("sender"),
         data.get("participant"),
@@ -93,6 +109,10 @@ def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> Inbo
         message_key.get("remoteJid"),
     )
     chat_value = _first(
+        obj.get("group_id"),
+        obj.get("group_jid"),
+        obj.get("chat_id"),
+        obj.get("chatId"),
         data.get("chat_id"),
         data.get("chatId"),
         data.get("to"),
@@ -101,6 +121,9 @@ def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> Inbo
         message_key.get("remoteJid"),
     )
     text_value = _first(
+        obj.get("content"),
+        obj.get("text"),
+        obj.get("body"),
         data.get("text"),
         data.get("body"),
         data.get("message" if isinstance(data.get("message"), str) else "__none__"),
@@ -108,7 +131,16 @@ def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> Inbo
         message.get("body"),
         message.get("conversation"),
     )
-    from_me = _as_bool(_first(data.get("from_me"), data.get("fromMe"), key.get("fromMe"), message_key.get("fromMe")))
+    from_me = _as_bool(
+        _first(
+            obj.get("from_me"),
+            obj.get("fromMe"),
+            data.get("from_me"),
+            data.get("fromMe"),
+            key.get("fromMe"),
+            message_key.get("fromMe"),
+        )
+    )
 
     return InboundEvent(
         event_key=event_key,
