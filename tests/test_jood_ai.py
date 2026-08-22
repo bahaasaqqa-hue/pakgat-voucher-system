@@ -39,7 +39,9 @@ class JoodAITests(unittest.TestCase):
         self.assertTrue(should_jood_ai_reply("السلام عليكم", "966500000000@s.whatsapp.net"))
         self.assertTrue(should_jood_ai_reply("يا جود عندي سؤال", "120363000000@g.us"))
         self.assertTrue(should_jood_ai_reply("Jood can you help?", "120363000000@g.us"))
-        self.assertFalse(should_jood_ai_reply("عندي سؤال", "120363000000@g.us"))
+        self.assertTrue(should_jood_ai_reply("عندي سؤال", "120363000000@g.us"))
+        self.assertTrue(should_jood_ai_reply("مين انتم", "120363000000@g.us"))
+        self.assertTrue(should_jood_ai_reply("مرحبا", "120363000000@g.us"))
         self.assertFalse(should_jood_ai_reply("", "966500000000@s.whatsapp.net"))
 
     def test_vertex_payload_uses_dynamic_few_shot_and_keeps_live_message_last(self):
