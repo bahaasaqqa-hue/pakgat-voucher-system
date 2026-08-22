@@ -23,6 +23,14 @@ sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
   "$APP_DIR"/app/whatsloop_inbound*.py \
   "$APP_DIR/app/whatsloop_security.py"
 
+# Focused Jood AI behavior gate uses only Python stdlib/unittest, so deployment
+# stops before restart if routing, payload, token-flow, or response parsing regresses.
+(
+  cd "$APP_DIR"
+  sudo -u pakgat env PYTHONPATH=. "$APP_DIR/.venv/bin/python" \
+    -m unittest discover -s tests -p 'test_jood_ai.py' -q
+)
+
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.service" /etc/systemd/system/pakgat-ai-monitor.service
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.timer" /etc/systemd/system/pakgat-ai-monitor.timer
 chmod 0750 "$APP_DIR/deploy/gce/pakgat-db-backup.sh"
