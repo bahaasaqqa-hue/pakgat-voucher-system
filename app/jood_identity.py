@@ -17,8 +17,18 @@ JOOD_SYSTEM_PROMPT = """أنتِ جود، موظفة بكجات الخارجية
 """
 
 
+def should_jood_ai_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
+    """Reply to direct chats, and to groups only when Jood is explicitly addressed."""
+    if not text or not chat_id or not text.strip():
+        return False
+    if not chat_id.endswith("@g.us"):
+        return True
+    normalized = " ".join(text.strip().lower().split())
+    return "جود" in normalized or "jood" in normalized
+
+
 def should_jood_test_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
-    """Keep the first Jood rollout restricted to explicit group greetings."""
+    """Legacy controlled greeting predicate kept for compatibility with older tests."""
     if not text or not chat_id or not chat_id.endswith("@g.us"):
         return False
     normalized = " ".join(text.strip().lower().split())
