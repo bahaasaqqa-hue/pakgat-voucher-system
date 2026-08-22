@@ -56,13 +56,8 @@ JOOD_SYSTEM_PROMPT = """أنتِ جود (Jood)، أخصائي الذكاء ال�
 
 
 def should_jood_ai_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
-    """Reply to direct chats, and to groups only when Jood is explicitly addressed."""
-    if not text or not chat_id or not text.strip():
-        return False
-    if not chat_id.endswith("@g.us"):
-        return True
-    normalized = " ".join(text.strip().lower().split())
-    return "جود" in normalized or "jood" in normalized
+    """Reply to every non-empty inbound customer message; from-me filtering happens upstream."""
+    return bool(text and chat_id and text.strip())
 
 
 def should_jood_test_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
