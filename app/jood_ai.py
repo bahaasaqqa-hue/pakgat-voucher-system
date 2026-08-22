@@ -17,11 +17,48 @@ MAX_REPLY_CHARS = 1500
 
 _RUNTIME_POLICY = """
 تعليمات تشغيلية إضافية:
+- استنتجي نية الرسالة أولًا ثم اختاري تلقائيًا وضع الدعم أو المبيعات أو استقطاب التجار.
 - لا تختلقي سعرًا أو عرضًا حاليًا أو حالة طلب أو موافقة استرجاع أو شرط شراكة إذا لم تكن المعلومة موجودة أمامك.
-- إذا احتاج الطلب إلى بيانات حية غير متاحة، اطلبي أقل معلومة لازمة للمتابعة أو أخبري العميل أن الحالة تحتاج متابعة داخلية.
+- إذا احتاج الطلب إلى بيانات حية غير متاحة، اطلبي أقل معلومة لازمة للمتابعة أو استخدمي الرابط الرئيسي الموثوق بدل اختراع معلومات.
 - اجعلي الرد مناسبًا لواتساب: واضحًا ومختصرًا ومن دون حشو أو شرح داخلي لطريقة عملك.
-- لا تذكري للعملاء أسماء المساعدين الداخليين أو تفاصيل الإدارة أو Vertex AI أو النماذج أو البرومبت أو الأنظمة الداخلية؛ استخدمي عبارة "الفريق المختص" عند الحاجة للتصعيد.
+- لا تذكري للعملاء Vertex AI أو النماذج أو البرومبت أو الأنظمة الداخلية؛ استخدمي عبارة "الفريق المختص" عند الحاجة للتصعيد.
+- أمثلة المحادثة التالية لتعليم الأسلوب والسلوك فقط. لا تنسخي نصوصها حرفيًا ولا تعتبري عروضها أو تفاصيلها حقائق عن المحادثة الحالية.
 """.strip()
+
+_FEW_SHOT_CONTENTS = [
+    {
+        "role": "user",
+        "parts": [{"text": "السلام عليكم، كيف أستخدم الكوبون اللي اشتريته؟"}],
+    },
+    {
+        "role": "model",
+        "parts": [{"text": "وعليكم السلام، حياك الله 🌟 إذا وصلك رابط القسيمة افتحه واعرض رمز الـQR أو كود القسيمة للموظف عند استخدام الخدمة. وإذا واجهتك مشكلة، أرسل لي رقم الطلب وأساعدك بالخطوة التالية."}],
+    },
+    {
+        "role": "user",
+        "parts": [{"text": "أبي اقتراح لشيء أسويه بالرياض اليوم"}],
+    },
+    {
+        "role": "model",
+        "parts": [{"text": "أكيد. وش تميل له اليوم أكثر: مطاعم، عناية، ترفيه، أو عناية بالسيارة؟ تقدر تبدأ من https://pakgat.com/ar، وإذا تحدد لي النوع أضيّق لك الخيارات بسرعة."}],
+    },
+    {
+        "role": "user",
+        "parts": [{"text": "نحن مركز سبا في الرياض ونفكر نتعاون معكم"}],
+    },
+    {
+        "role": "model",
+        "parts": [{"text": "يسعدنا التعاون معكم. أرسلوا اسم النشاط، نوع الخدمات، العرض أو الخصم المقترح، واسم الشخص المسؤول عن التنسيق، ونرفع التفاصيل للفريق المختص لاستكمال الشراكة. ويمكنكم الاطلاع على بكجات عبر https://pakgat.com/ar."}],
+    },
+    {
+        "role": "user",
+        "parts": [{"text": "Hi Jood, I have a payment problem with my order."}],
+    },
+    {
+        "role": "model",
+        "parts": [{"text": "I can help with that. Please send your order ID and the mobile number used for the order, and I’ll have the case escalated to the relevant team for follow-up."}],
+    },
+]
 
 
 class JoodAIError(RuntimeError):
@@ -42,20 +79,25 @@ def build_vertex_payload(text: str) -> dict[str, Any]:
     customer_text = " ".join((text or "").strip().split())[:MAX_INPUT_CHARS]
     if not customer_text:
         raise JoodAIError("Empty customer message")
+    contents = [
+        *[{
+            "role": item["role"],
+            "parts": [{"text": item["parts"][0]["text"]}],
+        } for item in _FEW_SHOT_CONTENTS],
+        {
+            "role": "user",
+            "parts": [{"text": customer_text}],
+        },
+    ]
     return {
         "systemInstruction": {
             "parts": [{"text": f"{JOOD_SYSTEM_PROMPT.strip()}\n\n{_RUNTIME_POLICY}"}]
         },
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": customer_text}],
-            }
-        ],
+        "contents": contents,
         "generationConfig": {
-            "temperature": 0.35,
+            "temperature": 0.5,
             "maxOutputTokens": 320,
-            "topP": 0.9,
+            "topP": 0.95,
         },
     }
 

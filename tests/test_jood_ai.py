@@ -42,20 +42,40 @@ class JoodAITests(unittest.TestCase):
         self.assertFalse(should_jood_ai_reply("عندي سؤال", "120363000000@g.us"))
         self.assertFalse(should_jood_ai_reply("", "966500000000@s.whatsapp.net"))
 
-    def test_vertex_payload_contains_identity_and_customer_text(self):
-        payload = build_vertex_payload("أبغى أعرف عن بكجات")
+    def test_vertex_payload_uses_dynamic_few_shot_and_keeps_live_message_last(self):
+        customer_text = "جود، عرفيني عن بكجات بجملة واحدة"
+        payload = build_vertex_payload(customer_text)
         self.assertIn("systemInstruction", payload)
-        self.assertEqual(payload["contents"][0]["role"], "user")
-        self.assertEqual(payload["contents"][0]["parts"][0]["text"], "أبغى أعرف عن بكجات")
+        roles = [item["role"] for item in payload["contents"]]
+        self.assertGreaterEqual(roles.count("model"), 3)
+        self.assertEqual(payload["contents"][-1]["role"], "user")
+        self.assertEqual(payload["contents"][-1]["parts"][0]["text"], customer_text)
 
-    def test_vertex_prompt_contains_concrete_pakgat_business_facts(self):
-        payload = build_vertex_payload("جود، عرفيني عن بكجات بجملة واحدة")
+    def test_prompt_contains_role_rules_but_no_fixed_pakgat_answer(self):
+        payload = build_vertex_payload("عرفيني عن بكجات")
         system_text = payload["systemInstruction"]["parts"][0]["text"]
-        self.assertIn("منصة سعودية", system_text)
-        self.assertIn("بكجات وكوبونات", system_text)
-        self.assertIn("الرياض", system_text)
-        self.assertIn("تجارب", system_text)
-        self.assertIn("لا تستخدمي عبارات تسويقية عامة", system_text)
+        self.assertIn("B2C", system_text)
+        self.assertIn("B2B", system_text)
+        self.assertIn("المبيعات", system_text)
+        self.assertIn("لا تنسخي", system_text)
+        self.assertIn("https://pakgat.com/ar", system_text)
+        self.assertNotIn(
+            "بكجات منصة سعودية تجمع لك بكجات وكوبونات وعروض وتجارب مختارة في الرياض وتسهّل شراءها واستخدامها رقميًا",
+            system_text,
+        )
+
+    def test_few_shot_examples_are_style_guidance_not_unverified_offers(self):
+        payload = build_vertex_payload("أبغى عرض")
+        serialized = json.dumps(payload["contents"][:-1], ensure_ascii=False)
+        self.assertNotIn("50%", serialized)
+        self.assertNotIn("خصم حصري لمشتركينا", serialized)
+        self.assertNotIn("نفاد الكمية", serialized)
+        self.assertIn("pakgat.com/ar", serialized)
+
+    def test_generation_config_keeps_responses_varied_but_controlled(self):
+        payload = build_vertex_payload("مرحبا")
+        self.assertEqual(payload["generationConfig"]["temperature"], 0.5)
+        self.assertEqual(payload["generationConfig"]["topP"], 0.95)
 
     def test_extract_vertex_text(self):
         data = {"candidates": [{"content": {"parts": [{"text": "أهلًا"}, {"text": " بك"}]}}]}
