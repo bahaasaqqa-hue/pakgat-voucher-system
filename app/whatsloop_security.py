@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections.abc import Mapping
 
 _CURRENT_CONTEXT = b"pakgat:whatsloop:webhook:v2"
 _LEGACY_CONTEXT = b"pakgat:whatsloop:webhook:v1"
@@ -28,3 +29,31 @@ def webhook_token_is_valid(candidate: str, admin_secret: str) -> bool:
     return hmac.compare_digest(candidate, current_webhook_token(admin_secret)) or hmac.compare_digest(
         candidate, legacy_webhook_token(admin_secret)
     )
+
+
+def signature_header_metadata(headers: Mapping[str, str]) -> list[str]:
+    """Return only safe metadata for likely webhook-signature headers.
+
+    Values are never logged. We expose only the header name, value length, and a
+    known non-secret scheme prefix such as ``sha256=`` when present.
+    """
+    rows: list[str] = []
+    for raw_name, raw_value in headers.items():
+        name = str(raw_name or "").strip().lower()
+        if not name:
+            continue
+        likely_signature = (
+            "signature" in name
+            or "hmac" in name
+            or ("whatsloop" in name and any(token in name for token in ("sign", "hook")))
+        )
+        if not likely_signature:
+            continue
+        value = str(raw_value or "")
+        prefix = ""
+        for known in ("sha256=", "sha1=", "v1=", "v0="):
+            if value.lower().startswith(known):
+                prefix = known
+                break
+        rows.append(f"{name}(len={len(value)},prefix={prefix})")
+    return sorted(rows)
