@@ -46,9 +46,12 @@ class JoodVoiceRouteArchitectureTests(unittest.TestCase):
         script = module.build_self_test_script(7)
 
         self.assertIn("/admin/company/jood/voice/7/tts", script)
+        self.assertIn("السلام عليكم، معك جود من بكجات.", script)
         self.assertIn("navigator.mediaDevices.enumerateDevices", script)
         self.assertIn("audiooutput", script)
+        self.assertIn("new Audio", script)
         self.assertIn("setSinkId", script)
+        self.assertIn("playUntilEnded", script)
         self.assertIn("realtek", script.lower())
         self.assertIn("speakers", script.lower())
         self.assertIn("voicemeeter", script.lower())
