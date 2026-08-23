@@ -9,6 +9,7 @@ from app.jood_voice_live_bridge import (
     initial_voice_opening,
     start_voice_conversation,
 )
+from app.jood_voice_local_self_test import build_local_self_test_overlay
 
 # Regression coverage for audible startup and standalone TTS self-test.
 
@@ -65,26 +66,27 @@ class JoodVoiceBridgeUITests(unittest.TestCase):
         self.assertIn("startBtn.textContent = 'إعادة تشغيل جود'", script)
         self.assertNotIn("Microsoft Edge", script)
 
-    def test_bridge_self_test_uses_physical_output_sink_not_call_audio_context(self):
-        script = build_live_voice_bridge_script(7)
-        self.assertIn("test-jood-voice", script)
-        self.assertIn("اختبار صوت جود", script)
-        self.assertIn("السلام عليكم، معك جود من بكجات.", script)
-        handler = script[script.index("testVoiceBtn.addEventListener"):script.index("startBtn.addEventListener")]
-        self.assertIn("navigator.mediaDevices.enumerateDevices", handler)
-        self.assertIn("audiooutput", handler)
-        self.assertIn("setSinkId", handler)
-        self.assertIn("new Audio", handler)
-        self.assertIn("voicemeeter", handler.lower())
-        self.assertIn("realtek", handler.lower())
-        self.assertIn("TTS HTTP", handler)
-        self.assertIn("Audio Bytes", handler)
-        self.assertIn("Selected Sink", handler)
-        self.assertIn("Playback State", handler)
-        self.assertIn("ended", handler.lower())
-        self.assertNotIn("await speakReply", handler)
-        self.assertNotIn("runDiagnostics", handler)
-        self.assertNotIn("startCall", handler)
+    def test_local_self_test_uses_physical_output_sink_not_call_audio_context(self):
+        overlay = build_local_self_test_overlay(7)
+        self.assertIn("test-jood-voice", overlay)
+        self.assertIn("اختبار صوت جود", overlay)
+        self.assertIn("السلام عليكم، معك جود من بكجات.", overlay)
+        self.assertIn("/admin/company/jood/voice/7/tts", overlay)
+        self.assertIn("navigator.mediaDevices.enumerateDevices", overlay)
+        self.assertIn("audiooutput", overlay)
+        self.assertIn("setSinkId", overlay)
+        self.assertIn("new Audio", overlay)
+        self.assertIn("voicemeeter", overlay.lower())
+        self.assertIn("realtek", overlay.lower())
+        self.assertIn("TTS HTTP", overlay)
+        self.assertIn("Audio Bytes", overlay)
+        self.assertIn("Selected Sink", overlay)
+        self.assertIn("Audio Decode", overlay)
+        self.assertIn("Playback State", overlay)
+        self.assertIn("ended", overlay.lower())
+        self.assertNotIn("await speakReply", overlay)
+        self.assertNotIn("runDiagnostics", overlay)
+        self.assertNotIn("startCall", overlay)
 
     def test_existing_session_start_returns_opening_without_mutating_transcript(self):
         original_transcript = "CUSTOMER: سابق"
