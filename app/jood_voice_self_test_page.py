@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import json
-
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy.orm import Session
 
 from app import application as core
-from app.jood_company_ops import CompanyContact, JoodCallSession
 
 
 def _admin_redirect(request: Request):
@@ -18,233 +14,126 @@ def _admin_redirect(request: Request):
     return None
 
 
-def build_self_test_script(session_id: int) -> str:
-    tts_url = f"/admin/company/jood/voice/{int(session_id)}/tts"
-    template = r"""
-const TTS_URL = __TTS_URL__;
-const testBtn = document.getElementById('jood-self-test-play');
-const statusEl = document.getElementById('jood-self-test-status');
-const diagRows = {
-  'TTS HTTP': document.getElementById('diag-http'),
-  'Audio Bytes': document.getElementById('diag-bytes'),
-  'Selected Sink': document.getElementById('diag-sink'),
-  'Audio Decode': document.getElementById('diag-decode'),
-  'Playback State': document.getElementById('diag-playback')
-};
-
-function setStatus(text) {
-  if (statusEl) statusEl.textContent = text;
-}
-
-function setDiag(key, value) {
-  const el = diagRows[key];
-  if (el) el.textContent = String(value == null ? '—' : value);
-}
-
-function resetDiagnostics() {
-  for (const key of Object.keys(diagRows)) setDiag(key, '—');
-}
-
-function isRejectedOutput(device) {
-  const label = String((device && device.label) || '').toLowerCase();
-  return label.includes('voicemeeter')
-    || label.includes('vb-audio')
-    || label.includes('virtual cable')
-    || label.includes('motorola')
-    || label.includes('hands-free')
-    || label.includes('hands free');
-}
-
-function physicalOutputScore(device) {
-  if (!device || device.kind !== 'audiooutput' || isRejectedOutput(device)) return -1;
-  const label = String(device.label || '').toLowerCase();
-  if (!label) return -1;
-  let score = -1;
-  if (label.includes('realtek')) score = 120;
-  else if (label.includes('speakers') || label.includes('speaker')) score = 110;
-  else if (label.includes('lg ultrafine') || label.includes('lg')) score = 100;
-  else if (label.includes('headphones') || label.includes('headphone')) score = 90;
-  else if (label.includes('headset')) score = 80;
-  if (score > 0 && device.deviceId && device.deviceId !== 'default') score += 10;
-  return score;
-}
-
-async function choosePhysicalOutput() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-    throw new Error('Chrome لا يوفّر enumerateDevices.');
-  }
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const outputs = devices.filter(device => device.kind === 'audiooutput');
-  const ranked = outputs
-    .map(device => ({device, score: physicalOutputScore(device)}))
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-  if (ranked.length) return ranked[0].device;
-
-  if (typeof navigator.mediaDevices.selectAudioOutput === 'function') {
-    setStatus('اختر Speakers / Realtek / LG فقط. لا تختَر Voicemeeter أو Motorola Hands-Free.');
-    const selected = await navigator.mediaDevices.selectAudioOutput();
-    if (!selected || selected.kind !== 'audiooutput') throw new Error('لم يتم اختيار مخرج صوت.');
-    if (isRejectedOutput(selected)) throw new Error('المخرج المختار مسار مكالمة/افتراضي وليس سماعة محلية.');
-    return selected;
-  }
-
-  const names = outputs.map(device => device.label || '(بدون اسم)').join(' | ');
-  throw new Error('لم يجد Chrome سماعة محلية مستقلة. المخرجات: ' + (names || 'لا يوجد'));
-}
-
-function waitForCanPlay(audio) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error('انتهت مهلة Audio Decode.'));
-    }, 10000);
-    const finish = callback => event => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      callback(event);
-    };
-    audio.addEventListener('canplay', finish(() => resolve()), {once: true});
-    audio.addEventListener('error', finish(() => reject(new Error('فشل Audio Decode في Chrome.'))), {once: true});
-    audio.load();
-  });
-}
-
-function playUntilEnded(audio) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error('انتهت مهلة Playback قبل حدث ended.'));
-    }, 20000);
-    const finish = callback => event => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      callback(event);
-    };
-    audio.addEventListener('play', () => setDiag('Playback State', 'playing'), {once: true});
-    audio.addEventListener('ended', finish(() => {
-      setDiag('Playback State', 'ended');
-      resolve();
-    }), {once: true});
-    audio.addEventListener('error', finish(() => reject(new Error('فشل Playback في Chrome.'))), {once: true});
-    Promise.resolve(audio.play()).catch(error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}
-
-if (testBtn) {
-  testBtn.addEventListener('click', async () => {
-    testBtn.disabled = true;
-    resetDiagnostics();
-    setStatus('جاري توليد صوت جود واختيار سماعة اللابتوب...');
-    let objectUrl = '';
-    try {
-      const response = await fetch(TTS_URL, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text: 'السلام عليكم، معك جود من بكجات.'})
-      });
-      setDiag('TTS HTTP', response.status);
-      if (!response.ok) {
-        let detail = 'TTS HTTP ' + response.status;
-        try { detail = (await response.json()).detail || detail; } catch (_) {}
-        throw new Error(detail);
-      }
-
-      const blob = await response.blob();
-      setDiag('Audio Bytes', blob.size);
-      if (!blob || blob.size < 128) throw new Error('ملف Zariyah فارغ أو صغير جدًا.');
-
-      const sink = await choosePhysicalOutput();
-      const sinkLabel = sink.label || ('device ' + sink.deviceId);
-      setDiag('Selected Sink', sinkLabel);
-
-      const audio = new Audio();
-      if (typeof audio.setSinkId !== 'function') throw new Error('Chrome لا يدعم setSinkId على هذا الجهاز.');
-      await audio.setSinkId(sink.deviceId);
-      setDiag('Selected Sink', sinkLabel + ' [' + sink.deviceId + ']');
-
-      objectUrl = URL.createObjectURL(blob);
-      audio.preload = 'auto';
-      audio.src = objectUrl;
-      setDiag('Audio Decode', 'checking');
-      await waitForCanPlay(audio);
-      setDiag('Audio Decode', 'ready');
-      setDiag('Playback State', 'starting');
-      await playUntilEnded(audio);
-      setStatus('انتهى الاختبار. إذا سمعت جود فمسار Zariyah والسماعة المحلية يعملان.');
-    } catch (error) {
-      setDiag('Playback State', 'failed: ' + error.message);
-      setStatus('فشل الاختبار: ' + error.message);
-    } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      testBtn.disabled = false;
-    }
-  });
-}
-
-resetDiagnostics();
-setStatus('جاهز. هذا الاختبار مستقل عن Phone Link وB1/B2 ومسار المكالمة.');
-""".strip()
-    return template.replace("__TTS_URL__", json.dumps(tts_url))
-
-
 @core.app.get("/admin/company/jood/voice/{session_id}/self-test", response_class=HTMLResponse)
-def jood_voice_self_test_page(session_id: int, request: Request, db: Session = Depends(core.get_db)):
+def jood_voice_self_test_page(session_id: int, request: Request):
     redirect = _admin_redirect(request)
     if redirect:
         return redirect
 
-    session = db.get(JoodCallSession, session_id)
-    if not session or session.status != "active":
-        raise HTTPException(status_code=404, detail="Active voice session not found")
-    contact = db.get(CompanyContact, session.contact_id)
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    tts_url = f"/admin/company/jood/voice/{int(session_id)}/tts"
 
-    script = build_self_test_script(session.id)
-    label = contact.display_name or contact.business_name or ("Customer" if contact.contact_type == "customer" else "Merchant")
-    body = f"""
-    <main class='wrap' style='padding:28px 0 48px'>
-      <section class='card' style='padding:24px;max-width:760px;margin:auto'>
-        <div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>
-          <div>
-            <h1 style='margin-bottom:4px'>اختبار صوت جود المستقل</h1>
-            <p class='muted'>Voice Session #{session.id} · {core.esc(label)}</p>
-          </div>
-          <a class='btn btn-muted' href='/admin/company/jood/voice/{session.id}/bridge'>رجوع إلى المكالمة</a>
-        </div>
+    html = r"""
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>اختبار صوت جود</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f8fafc; margin:0; padding:32px; color:#0f172a; }
+    main { max-width:680px; margin:0 auto; background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:24px; }
+    button { cursor:pointer; border:0; border-radius:10px; padding:12px 18px; font-size:16px; background:#2563eb; color:#fff; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .status { margin-top:16px; padding:12px; border-radius:10px; background:#eff6ff; }
+    .diag { margin-top:16px; padding:14px; border:1px solid #e2e8f0; border-radius:10px; line-height:1.9; }
+    .muted { color:#64748b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>اختبار صوت جود المستقل</h1>
+    <p class="muted">هذه الصفحة لا تستخدم Phone Link أو Voicemeeter أو STT.</p>
 
-        <div class='alert' style='margin-top:16px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a'>
-          هذه الصفحة لا تستخدم Phone Link ولا Voicemeeter B1/B2 ولا STT. الاختبار يطلب Zariyah من Pakgat ثم يوجّهها إلى سماعة محلية فعلية في Chrome.
-        </div>
+    <button id="play-jood" type="button">🔊 تشغيل صوت جود التجريبي</button>
 
-        <button id='jood-self-test-play' class='btn btn-blue' type='button' style='margin:10px 0 14px'>🔊 تشغيل صوت جود التجريبي</button>
-        <div id='jood-self-test-status' class='alert'>جاهز.</div>
+    <div id="status" class="status">جاهز.</div>
+    <div class="diag">
+      <div>TTS HTTP: <strong id="diag-http">—</strong></div>
+      <div>Audio Bytes: <strong id="diag-bytes">—</strong></div>
+      <div>Sink: <strong id="diag-sink">—</strong></div>
+      <div>State: <strong id="diag-state">—</strong></div>
+    </div>
+  </main>
 
-        <div class='card' style='padding:16px;margin-top:12px;background:#f8fafc'>
-          <strong>Diagnostics</strong>
-          <div style='display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:8px 12px;margin-top:12px;font-size:14px'>
-            <div><strong>TTS HTTP</strong></div><div id='diag-http'>—</div>
-            <div><strong>Audio Bytes</strong></div><div id='diag-bytes'>—</div>
-            <div><strong>Selected Sink</strong></div><div id='diag-sink'>—</div>
-            <div><strong>Audio Decode</strong></div><div id='diag-decode'>—</div>
-            <div><strong>Playback State</strong></div><div id='diag-playback'>—</div>
-          </div>
-        </div>
-      </section>
-    </main>
-    <script>{script}</script>
-    """
-    return HTMLResponse(core.page_shell(f"اختبار صوت جود #{session.id}", body, admin=True))
+  <script>
+    const TTS_URL = "__TTS_URL__";
+    const button = document.getElementById('play-jood');
+    const statusEl = document.getElementById('status');
+    const httpEl = document.getElementById('diag-http');
+    const bytesEl = document.getElementById('diag-bytes');
+    const sinkEl = document.getElementById('diag-sink');
+    const stateEl = document.getElementById('diag-state');
+
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      httpEl.textContent = '—';
+      bytesEl.textContent = '—';
+      sinkEl.textContent = '—';
+      stateEl.textContent = 'starting';
+      statusEl.textContent = 'جاري توليد صوت جود...';
+
+      let objectUrl = null;
+      try {
+        const response = await fetch(TTS_URL, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({text: 'السلام عليكم، معك جود من بكجات.'})
+        });
+
+        httpEl.textContent = String(response.status);
+        if (!response.ok) {
+          let message = 'TTS HTTP ' + response.status;
+          try {
+            const payload = await response.json();
+            if (payload && payload.detail) message = payload.detail;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        const blob = await response.blob();
+        bytesEl.textContent = String(blob.size);
+        if (!blob.size) throw new Error('ملف الصوت فارغ.');
+
+        objectUrl = URL.createObjectURL(blob);
+        const audio = new Audio(objectUrl);
+        window.__joodSelfTestAudio = audio;
+
+        if (typeof audio.setSinkId !== 'function') {
+          throw new Error('Chrome لا يدعم setSinkId على هذا الجهاز.');
+        }
+
+        await audio.setSinkId('default');
+        sinkEl.textContent = 'default';
+
+        audio.addEventListener('play', () => {
+          stateEl.textContent = 'playing';
+          statusEl.textContent = 'جود تتكلم الآن...';
+        }, {once:true});
+
+        audio.addEventListener('ended', () => {
+          stateEl.textContent = 'ended';
+          statusEl.textContent = 'انتهى تشغيل صوت جود.';
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+          button.disabled = false;
+        }, {once:true});
+
+        audio.addEventListener('error', () => {
+          stateEl.textContent = 'playback-error';
+        }, {once:true});
+
+        await audio.play();
+      } catch (error) {
+        stateEl.textContent = 'failed';
+        statusEl.textContent = 'فشل الاختبار: ' + error.message;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+""".replace("__TTS_URL__", tts_url)
+
+    return HTMLResponse(content=html)
