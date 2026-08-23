@@ -1,0 +1,46 @@
+name: Jood PR Verification
+
+on:
+  pull_request:
+    branches:
+      - gce-migration
+    paths:
+      - 'app/jood*.py'
+      - 'app/whatsloop_inbound.py'
+      - 'main.py'
+      - 'tests/test_jood_*.py'
+      - 'deploy/gce/install-ai-company.sh'
+      - '.github/workflows/jood-pr.yml'
+  push:
+    branches:
+      - 'feat/jood-company-ai-omnichannel'
+
+jobs:
+  verify-jood:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: sqlite:///:memory:
+      ADMIN_PASSWORD: test-only-password
+      ADMIN_SECRET: test-only-admin-secret
+      PUBLIC_BASE_URL: https://example.test
+      WHATSLOOP_API_BASE_URL: https://example.test/api/v1
+      WHATSLOOP_API_TOKEN: test-only-whatsloop-token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile Jood modules
+        run: |
+          python -m py_compile main.py app/jood*.py app/whatsloop_inbound*.py app/whatsloop_security.py
+
+      - name: Run Jood regression tests
+        run: python -m unittest discover -s tests -p 'test_jood_*.py' -v
