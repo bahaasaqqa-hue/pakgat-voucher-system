@@ -35,7 +35,27 @@ def _replace_unapproved_url(match: re.Match[str]) -> str:
     return (url if url in APPROVED_URLS else PAKGAT_HOME_URL) + suffix
 
 
-def sanitize_jood_reply(text: str, *, allow_handoff_claim: bool = False) -> str:
+def _is_car_care_request(customer_text: str) -> bool:
+    value = " ".join(str(customer_text or "").strip().lower().split())
+    return any(
+        marker in value
+        for marker in (
+            "العناية بالسيارات",
+            "عناية بالسيارات",
+            "العنايه بالسيارات",
+            "العنايه يالسيارات",
+            "عروض السيارات",
+            "car care",
+        )
+    )
+
+
+def sanitize_jood_reply(
+    text: str,
+    *,
+    allow_handoff_claim: bool = False,
+    customer_text: str = "",
+) -> str:
     """Apply hard output guardrails before a Jood reply reaches any channel."""
     safe = str(text or "").strip()
     if not safe:
@@ -45,6 +65,9 @@ def sanitize_jood_reply(text: str, *, allow_handoff_claim: bool = False) -> str:
     safe = safe.replace(LEGACY_CAR_CARE_PATH, CAR_CARE_URL)
     safe = _URL_RE.sub(_replace_unapproved_url, safe)
 
+    if _is_car_care_request(customer_text) and CAR_CARE_URL not in safe:
+        safe = f"{safe}\n{CAR_CARE_URL}".strip()
+
     if not allow_handoff_claim:
         replacements = {
             "تم رفع بياناتكم": "أقدر أرفع بياناتكم",
@@ -53,6 +76,8 @@ def sanitize_jood_reply(text: str, *, allow_handoff_claim: bool = False) -> str:
             "تم رفع طلبك": "أقدر أرفع طلبك",
             "تم تسجيل بياناتكم": "أقدر أسجل بياناتكم",
             "تم تسجيل بياناتك": "أقدر أسجل بياناتك",
+            "تم رفع حالتك": "أقدر أرفع حالتك",
+            "تم رفع الحالة": "أقدر أرفع الحالة",
         }
         for completed, prospective in replacements.items():
             safe = safe.replace(completed, prospective)
