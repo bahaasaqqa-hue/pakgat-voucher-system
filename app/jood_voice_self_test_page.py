@@ -57,15 +57,15 @@ def jood_voice_self_test_page(session_id: int, request: Request):
 
   <script>
     const TTS_URL = "__TTS_URL__";
-    const button = document.getElementById('play-jood');
+    const playBtn = document.getElementById('play-jood');
     const statusEl = document.getElementById('status');
     const httpEl = document.getElementById('diag-http');
     const bytesEl = document.getElementById('diag-bytes');
     const sinkEl = document.getElementById('diag-sink');
     const stateEl = document.getElementById('diag-state');
 
-    button.addEventListener('click', async () => {
-      button.disabled = true;
+    async function playTest() {
+      playBtn.disabled = true;
       httpEl.textContent = '—';
       bytesEl.textContent = '—';
       sinkEl.textContent = '—';
@@ -116,7 +116,7 @@ def jood_voice_self_test_page(session_id: int, request: Request):
           statusEl.textContent = 'انتهى تشغيل صوت جود.';
           if (objectUrl) URL.revokeObjectURL(objectUrl);
           objectUrl = null;
-          button.disabled = false;
+          playBtn.disabled = false;
         }, {once:true});
 
         audio.addEventListener('error', () => {
@@ -128,9 +128,11 @@ def jood_voice_self_test_page(session_id: int, request: Request):
         stateEl.textContent = 'failed';
         statusEl.textContent = 'فشل الاختبار: ' + error.message;
         if (objectUrl) URL.revokeObjectURL(objectUrl);
-        button.disabled = false;
+        playBtn.disabled = false;
       }
-    });
+    }
+
+    playBtn.addEventListener('click', playTest);
   </script>
 </body>
 </html>
