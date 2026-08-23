@@ -77,9 +77,10 @@ class JoodCatalogTests(unittest.TestCase):
         product = self.items[0]
         self.assertEqual(
             strict_product_message(product),
-            "أهلاً بك! أبشر، تفضل رابط العرض المباشر لـ بكج هدية عناية:\n"
-            "https://pakgat.com/ar/p/11\n"
-            "استخدم كود الخصم: VIP",
+            "بدون قروشة.. أهلاً بك في باكيجات! 🌸\n\n"
+            "أبشر بعزك، هذا رابط العرض المباشر لـ بكج هدية عناية:\n"
+            "🔗 https://pakgat.com/ar/p/11\n\n"
+            "خصمك يضبطك مع كود: VIP 🚀",
         )
 
     def test_every_product_action_uses_the_same_strict_template(self):
