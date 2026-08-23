@@ -19,7 +19,17 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from app import application as core
 from app.jood_ai import JoodAIError, generate_jood_reply
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
+from app.jood_company_ops import (
+    append_turn,
+    conversation_key_for,
+    create_handoff,
+    load_recent_turns,
+    resolve_contact_mode,
+    route_jood_intent,
+    trusted_context_for,
+)
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
+from app.jood_policy import sanitize_jood_reply
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
@@ -199,8 +209,52 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
         and normalized.from_me is not True
         and should_jood_ai_reply(normalized.text, normalized.chat_id)
     ):
+        contact = None
+        conversation_key = ""
         try:
-            generated_reply = await asyncio.to_thread(generate_jood_reply, normalized.text or "")
+            sender_identity = normalized.sender or normalized.chat_id or ""
+            contact, mode = resolve_contact_mode(db, sender_identity, normalized.text or "")
+            history = load_recent_turns(db, contact.id, limit=8)
+            intent = route_jood_intent(normalized.text or "", mode)
+            trusted_context = trusted_context_for(normalized.text or "", mode)
+            conversation_key = conversation_key_for(
+                "whatsapp",
+                contact.id,
+                chat_id=normalized.chat_id or "",
+                sender=normalized.sender or "",
+            )
+            append_turn(
+                db,
+                contact.id,
+                "whatsapp",
+                "user",
+                normalized.text or "",
+                conversation_key,
+            )
+
+            allow_handoff_claim = False
+            if intent == "human_handoff":
+                create_handoff(
+                    db,
+                    contact.id,
+                    "customer_support" if mode == "customer" else "merchant_partnership",
+                    details=normalized.text or "",
+                )
+                allow_handoff_claim = True
+                trusted_context += "\nA real handoff record has now been created, so you may truthfully say the case was raised to the relevant team."
+
+            generated_reply = await asyncio.to_thread(
+                generate_jood_reply,
+                normalized.text or "",
+                history,
+                mode,
+                intent,
+                trusted_context,
+            )
+            generated_reply = sanitize_jood_reply(
+                generated_reply,
+                allow_handoff_claim=allow_handoff_claim,
+            )
         except JoodAIError as exc:
             reply_status = "ai_failed"
             core.log_event(
@@ -224,6 +278,15 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
         else:
             ok, provider_status = await asyncio.to_thread(_send_jood_reply, normalized, generated_reply)
             reply_status = "sent" if ok else "failed"
+            if ok and contact is not None:
+                append_turn(
+                    db,
+                    contact.id,
+                    "whatsapp",
+                    "assistant",
+                    generated_reply,
+                    conversation_key,
+                )
             core.log_event(
                 db,
                 "jood_whatsloop_reply_sent" if ok else "jood_whatsloop_reply_failed",
@@ -280,20 +343,19 @@ def whatsloop_inbox(request: Request, db: Session = Depends(core.get_db)):
           <div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>
             <div><h1 style='margin:0 0 5px'>جود · واتساب العملاء</h1>
             <p class='muted' style='margin:0'>{core.esc(JOOD_ROLE_AR)} عبر WhatsLoop.</p></div>
-            <a class='btn btn-muted' href='/admin/company'>مركز التحكم</a>
+            <a class='btn btn-muted' href='/admin/company/jood'>مركز جود</a>
           </div>
           <div style='display:flex;gap:7px;flex-wrap:wrap;margin-top:12px'>
             <span class='badge badge-active'>خدمة العملاء</span>
             <span class='badge badge-active'>المبيعات</span>
             <span class='badge badge-active'>التجار</span>
-            <span class='badge badge-active'>ذكاء اصطناعي</span>
+            <span class='badge badge-active'>ذاكرة فعلية</span>
           </div>
-          <p class='muted' style='margin:12px 0 0'>شاتي يبقى المساعد التنفيذي الداخلي لبهاء؛ جود هي الواجهة الخارجية لبكجات.</p>
         </div>
       </section>
       <section class='card' style='padding:22px;margin:18px 0'>
-        <h2>رابط Webhook الجديد</h2>
-        <p class='muted'>هذا رابط مُدوّر جديد. الرابط السابق سيبقى مقبولًا مؤقتًا حتى يتم تحديث WhatsLoop، لذلك لن تنقطع الرسائل أثناء الانتقال.</p>
+        <h2>Webhook</h2>
+        <p class='muted'>التوقيع الأمني إلزامي قبل قراءة الرسالة أو تخزينها أو إرسال أي رد.</p>
         <input class='input' dir='ltr' readonly value='{core.esc(callback_url)}'>
       </section>
       <section class='card' style='padding:22px'>
