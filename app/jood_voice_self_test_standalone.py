@@ -3,9 +3,129 @@ from __future__ import annotations
 import json
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app import application as core
+
+
+def build_standalone_self_test_script(session_id: int) -> str:
+    tts_url = json.dumps(f"/admin/company/jood/voice/{int(session_id)}/tts")
+    template = r"""
+const TTS_URL = __TTS_URL__;
+const btn = document.getElementById('play-jood');
+const statusEl = document.getElementById('status');
+const httpEl = document.getElementById('diag-http');
+const bytesEl = document.getElementById('diag-bytes');
+const sinkEl = document.getElementById('diag-sink');
+const stateEl = document.getElementById('diag-state');
+
+function showFailure(err) {
+  stateEl.textContent = 'failed';
+  statusEl.textContent = 'فشل الاختبار: ' + (err && err.message ? err.message : String(err));
+}
+
+async function getDefaultOutputLabel() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    return 'System default output';
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outputs = devices.filter(device => device.kind === 'audiooutput');
+    const selected = outputs.find(device => device.deviceId === 'default') || outputs[0];
+    return selected && selected.label ? selected.label : 'System default output';
+  } catch (_) {
+    return 'System default output';
+  }
+}
+
+if (!btn) {
+  throw new Error('Jood self-test button was not found');
+}
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  httpEl.textContent = '—';
+  bytesEl.textContent = '—';
+  sinkEl.textContent = '—';
+  stateEl.textContent = 'requesting';
+  statusEl.textContent = 'جاري طلب صوت جود من الخادم...';
+
+  let objectUrl = '';
+  try {
+    const response = await fetch(TTS_URL, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: 'السلام عليكم، معك جود من بكجات.'})
+    });
+
+    httpEl.textContent = String(response.status);
+    if (!response.ok) {
+      let detail = 'TTS HTTP ' + response.status;
+      try {
+        const payload = await response.json();
+        detail = payload.detail || detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+
+    const blob = await response.blob();
+    bytesEl.textContent = String(blob.size);
+    if (!blob || blob.size < 128) throw new Error('ملف الصوت فارغ أو غير صالح.');
+
+    objectUrl = URL.createObjectURL(blob);
+    const audio = new Audio(objectUrl);
+    audio.preload = 'auto';
+    audio.volume = 1.0;
+
+    const outputLabel = await getDefaultOutputLabel();
+    if (typeof audio.setSinkId === 'function') {
+      await audio.setSinkId('default');
+      sinkEl.textContent = outputLabel + ' [default]';
+    } else {
+      sinkEl.textContent = outputLabel + ' [browser default]';
+    }
+
+    audio.addEventListener('play', () => {
+      stateEl.textContent = 'playing';
+      statusEl.textContent = 'جود تتكلم الآن...';
+    }, {once: true});
+
+    await new Promise((resolve, reject) => {
+      audio.addEventListener('ended', resolve, {once: true});
+      audio.addEventListener('error', () => reject(new Error('فشل تشغيل ملف الصوت في Chrome.')), {once: true});
+      audio.play().catch(reject);
+    });
+
+    stateEl.textContent = 'ended';
+    statusEl.textContent = 'نجح الاختبار وانتهى تشغيل صوت جود.';
+  } catch (err) {
+    showFailure(err);
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    btn.disabled = false;
+  }
+});
+""".strip()
+    return template.replace("__TTS_URL__", tts_url)
+
+
+@core.app.get("/admin/company/jood/voice/{session_id}/self-test.js")
+def jood_voice_self_test_script(session_id: int, request: Request):
+    try:
+        core.require_admin(request)
+    except HTTPException:
+        return Response(
+            content="throw new Error('Admin authentication required');",
+            status_code=401,
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+    return Response(
+        content=build_standalone_self_test_script(session_id),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @core.app.get("/admin/company/jood/voice/{session_id}/self-test", response_class=HTMLResponse)
@@ -16,7 +136,7 @@ def jood_voice_self_test_standalone(session_id: int, request: Request):
         return RedirectResponse("/admin/login", status_code=303)
 
     tts_url = f"/admin/company/jood/voice/{int(session_id)}/tts"
-    tts_url_js = json.dumps(tts_url)
+    script_url = f"/admin/company/jood/voice/{int(session_id)}/self-test.js"
 
     html = f"""<!doctype html>
 <html lang="ar" dir="rtl">
@@ -55,107 +175,7 @@ def jood_voice_self_test_standalone(session_id: int, request: Request):
     </div>
   </main>
 
-  <script>
-    const TTS_URL = {tts_url_js};
-    const btn = document.getElementById('play-jood');
-    const statusEl = document.getElementById('status');
-    const httpEl = document.getElementById('diag-http');
-    const bytesEl = document.getElementById('diag-bytes');
-    const sinkEl = document.getElementById('diag-sink');
-    const stateEl = document.getElementById('diag-state');
-
-    async function getDefaultOutputLabel() {{
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {{
-        return 'System default output';
-      }}
-      try {{
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const outputs = devices.filter(d => d.kind === 'audiooutput');
-        const def = outputs.find(d => d.deviceId === 'default') || outputs[0];
-        return def && def.label ? def.label : 'System default output';
-      }} catch (_) {{
-        return 'System default output';
-      }}
-    }}
-
-    btn.addEventListener('click', async () => {{
-      btn.disabled = true;
-      httpEl.textContent = '—';
-      bytesEl.textContent = '—';
-      sinkEl.textContent = '—';
-      stateEl.textContent = 'starting';
-      statusEl.textContent = 'جاري توليد صوت جود...';
-
-      let objectUrl = '';
-      try {{
-        const response = await fetch(TTS_URL, {{
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {{'Content-Type': 'application/json'}},
-          body: JSON.stringify({{text: 'السلام عليكم، معك جود من بكجات.'}})
-        }});
-
-        httpEl.textContent = String(response.status);
-        if (!response.ok) {{
-          let detail = 'TTS HTTP ' + response.status;
-          try {{ detail = (await response.json()).detail || detail; }} catch (_) {{}}
-          throw new Error(detail);
-        }}
-
-        const blob = await response.blob();
-        bytesEl.textContent = String(blob.size);
-        if (!blob || blob.size < 128) throw new Error('ملف الصوت فارغ أو غير صالح.');
-
-        objectUrl = URL.createObjectURL(blob);
-        const audio = new Audio(objectUrl);
-        audio.preload = 'auto';
-        audio.volume = 1.0;
-
-        if (typeof audio.setSinkId !== 'function') {{
-          throw new Error('Chrome لا يدعم setSinkId على هذا الجهاز.');
-        }}
-
-        const outputLabel = await getDefaultOutputLabel();
-        await audio.setSinkId('default');
-        sinkEl.textContent = outputLabel + ' [default]';
-
-        await new Promise((resolve, reject) => {{
-          let settled = false;
-
-          audio.addEventListener('play', () => {{
-            stateEl.textContent = 'playing';
-            statusEl.textContent = 'جود تتكلم الآن...';
-          }}, {{once:true}});
-
-          audio.addEventListener('ended', () => {{
-            if (settled) return;
-            settled = true;
-            stateEl.textContent = 'ended';
-            statusEl.textContent = 'انتهى تشغيل صوت جود.';
-            resolve();
-          }}, {{once:true}});
-
-          audio.addEventListener('error', () => {{
-            if (settled) return;
-            settled = true;
-            reject(new Error('فشل تشغيل ملف الصوت في Chrome.'));
-          }}, {{once:true}});
-
-          audio.play().catch(err => {{
-            if (settled) return;
-            settled = true;
-            reject(err);
-          }});
-        }});
-      }} catch (err) {{
-        stateEl.textContent = 'failed';
-        statusEl.textContent = 'فشل الاختبار: ' + err.message;
-      }} finally {{
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        btn.disabled = false;
-      }}
-    }});
-  </script>
+  <script src="{script_url}" defer></script>
 </body>
 </html>"""
 
