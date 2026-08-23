@@ -12,6 +12,9 @@ sudo -u pakgat git -C "$APP_DIR" fetch origin
 sudo -u pakgat git -C "$APP_DIR" checkout gce-migration
 sudo -u pakgat git -C "$APP_DIR" pull --ff-only origin gce-migration
 
+# Ensure the approved Jood voice runtime is available before import/restart.
+sudo -u pakgat "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -q "edge-tts==7.2.8"
+
 # Safety gate: do not restart the live voucher service if a newly added AI,
 # Corporate Benefits, Jood, WhatsLoop, or Salla integration module has a Python syntax error.
 sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
