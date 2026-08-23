@@ -27,7 +27,7 @@ from app import jood_voice_bridge_ui as _jood_voice_bridge_ui  # noqa: F401 - ha
 from app import jood_voice_server_tts as _jood_voice_server_tts  # noqa: F401 - server-backed Zariyah playback for Chrome/Voicemeeter
 from app import jood_voice_server_stt as _jood_voice_server_stt  # noqa: F401 - server-backed Vertex transcription for Voicemeeter capture
 from app import jood_voice_live_bridge as _jood_voice_live_bridge  # noqa: F401 - Voicemeeter B1 MediaRecorder capture + automatic Jood call flow
-from app import jood_voice_local_self_test as _jood_voice_local_self_test  # noqa: F401 - physical-speaker Zariyah self-test independent from call B2
+from app import jood_voice_self_test_standalone as _jood_voice_self_test_standalone  # noqa: F401
 from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corporate DB/admin base
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
@@ -38,7 +38,6 @@ from app import jood_whatsapp_campaign_ui as _jood_whatsapp_campaign_ui  # noqa:
 from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operations entry in Pakgat AI navigation
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
-from app import jood_voice_self_test_inline as _jood_voice_self_test_inline  # noqa: F401 - final Jood voice route patch: inline physical-speaker self-test
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
 from app import admin_unified_theme as _admin_unified_theme  # noqa: F401 - final global admin visual shell, import LAST
 
