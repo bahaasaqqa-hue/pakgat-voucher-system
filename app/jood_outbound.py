@@ -206,7 +206,7 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    remember_outreach_context(db, contact.id, mode, goal, "individual")
+    remember_outreach_context(db, contact.id, mode, goal, "individual", message)
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
         db.commit()

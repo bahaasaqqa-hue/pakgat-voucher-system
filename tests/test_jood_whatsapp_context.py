@@ -8,6 +8,7 @@ from app.jood_whatsapp_context import (
     active_outreach_context,
     inbound_outreach_context,
     remember_outreach_context,
+    update_outreach_state,
 )
 
 
@@ -43,6 +44,21 @@ class JoodWhatsAppContextTests(unittest.TestCase):
 
     def test_no_active_outreach_leaves_normal_inbound_flow_untouched(self):
         self.assertEqual(inbound_outreach_context(self.db, 999), "")
+
+    def test_state_tracks_persona_stage_commitment_and_collected_info(self):
+        row = remember_outreach_context(self.db, 7, "customer", "تعريف العميل بالعروض", "individual")
+        self.assertEqual(row.state_json["direction"], "outbound")
+        self.assertEqual(row.state_json["persona"], "outbound_customer_sales")
+        update_outreach_state(
+            self.db,
+            7,
+            next_stage="details_shared",
+            last_commitment="سؤال العميل عن الفئة المفضلة",
+            collected_info={"interest": "car_care"},
+            status="active",
+        )
+        self.assertEqual(row.state_json["current_stage"], "details_shared")
+        self.assertEqual(row.state_json["collected_info"]["interest"], "car_care")
 
 
 if __name__ == "__main__":

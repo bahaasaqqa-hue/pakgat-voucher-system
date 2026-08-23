@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
-from app.jood_ai import JoodAIError, generate_jood_reply
+from app.jood_ai import JoodAIError, generate_jood_decision
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
 from app.jood_company_ops import (
     append_turn,
@@ -30,6 +30,7 @@ from app.jood_company_ops import (
 )
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
+from app.jood_reply_validation import validate_and_clean_reply
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
@@ -217,11 +218,21 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             history = load_recent_turns(db, contact.id, limit=8)
             intent = route_jood_intent(normalized.text or "", mode)
             trusted_context = trusted_context_for(normalized.text or "", mode)
-            from app.jood_whatsapp_context import inbound_outreach_context
+            from app.jood_whatsapp_context import (
+                active_outreach_context,
+                inbound_outreach_context,
+                update_outreach_state,
+            )
 
             persisted_outreach = inbound_outreach_context(db, contact.id)
             if persisted_outreach:
                 trusted_context += "\n" + persisted_outreach
+            context_row = active_outreach_context(db, contact.id)
+            state = dict(context_row.state_json or {}) if context_row else {}
+            direction = str(state.get("direction") or "inbound")
+            last_commitment = str(state.get("last_commitment") or "")
+            if not persisted_outreach:
+                trusted_context += "\nConversation direction: inbound. Persona: inbound_customer_support."
             conversation_key = conversation_key_for(
                 "whatsapp",
                 contact.id,
@@ -254,19 +265,58 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 allow_handoff_claim = True
                 trusted_context += "\nA real handoff record has now been created, so you may truthfully say the case was raised to the relevant team."
 
-            generated_reply = await asyncio.to_thread(
-                generate_jood_reply,
-                normalized.text or "",
-                history,
-                mode,
-                intent,
-                trusted_context,
-            )
+            decision = None
+            validation = None
+            correction = ""
+            for _attempt in range(2):
+                decision = await asyncio.to_thread(
+                    generate_jood_decision,
+                    normalized.text or "",
+                    history,
+                    mode,
+                    intent,
+                    trusted_context,
+                    correction,
+                )
+                validation = validate_and_clean_reply(
+                    decision["reply"],
+                    direction=direction,
+                    last_commitment=last_commitment,
+                    commitment_fulfilled=bool(decision.get("last_commitment_fulfilled")),
+                )
+                if validation.ok:
+                    break
+                correction = validation.reason
+            if not validation or not validation.ok:
+                if direction == "outbound" and mode == "merchant":
+                    generated_reply = "أعتذر عن الرد السابق. معك جود من باكيجات بخصوص فرصة الشراكة؛ أرسل لي اسم النشاط والمدينة ونوع الخدمات لأوضح لكم الخطوة المناسبة."
+                elif direction == "outbound":
+                    generated_reply = "أعتذر عن الرد السابق. تقدر تتصفح عروض وبكجات باكيجات المعتمدة هنا: https://pakgat.com/ar. أي فئة تهمك أكثر؟"
+                else:
+                    generated_reply = "أعتذر، لم يكتمل الرد. اكتب لي طلبك مرة أخرى باختصار وسأساعدك مباشرة."
+            else:
+                generated_reply = validation.reply
             generated_reply = sanitize_jood_reply(
                 generated_reply,
                 allow_handoff_claim=allow_handoff_claim,
                 customer_text=normalized.text or "",
             )
+            if context_row and decision and validation and validation.ok:
+                if bool(decision.get("handoff_required")) and not allow_handoff_claim:
+                    create_handoff(
+                        db,
+                        contact.id,
+                        "customer_support" if mode == "customer" else "merchant_partnership",
+                        details=normalized.text or "",
+                    )
+                update_outreach_state(
+                    db,
+                    contact.id,
+                    next_stage=str(decision.get("next_stage") or state.get("current_stage") or "active"),
+                    last_commitment=str(decision.get("last_commitment") or ""),
+                    collected_info=decision.get("collected_info") if isinstance(decision.get("collected_info"), dict) else None,
+                    status=str(decision.get("status") or "active"),
+                )
         except JoodAIError as exc:
             reply_status = "ai_failed"
             core.log_event(

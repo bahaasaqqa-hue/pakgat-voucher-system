@@ -16,6 +16,35 @@ MAX_INPUT_CHARS = 4000
 MAX_REPLY_CHARS = 1500
 MAX_HISTORY_TURNS = 8
 
+JOOD_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "reply": {"type": "STRING"},
+        "detected_intent": {"type": "STRING"},
+        "next_stage": {"type": "STRING"},
+        "last_commitment_fulfilled": {"type": "BOOLEAN"},
+        "handoff_required": {"type": "BOOLEAN"},
+        "last_commitment": {"type": "STRING"},
+        "status": {"type": "STRING"},
+        "collected_info": {
+            "type": "OBJECT",
+            "properties": {
+                "interest": {"type": "STRING"},
+                "business_name": {"type": "STRING"},
+                "city": {"type": "STRING"},
+                "services": {"type": "STRING"},
+            },
+        },
+    },
+    "required": [
+        "reply",
+        "detected_intent",
+        "next_stage",
+        "last_commitment_fulfilled",
+        "handoff_required",
+    ],
+}
+
 _RUNTIME_POLICY = """
 تعليمات تشغيلية إضافية:
 - التزمي بوضع Company AI المرسل لك؛ لا تغيّري Customer إلى Merchant أو العكس من نفسك في المحادثات الصادرة.
@@ -24,6 +53,10 @@ _RUNTIME_POLICY = """
 - يجوز أن تقولي إنك سترسلين معلومات أو عرضًا أو عقدًا على واتساب فقط بعد موافقة الطرف الآخر، لكن لا تقولي إنك أرسلتِ واتساب إلا إذا أكد السياق التشغيلي نجاح الإرسال فعليًا.
 - في وضع Customer اشرحي العرض المعتمد وفائدته وطريقة الشراء، واطلبي موافقته قبل إرسال رابطه على واتساب.
 - إذا بدأت المحادثة برسالة سابقة من جود ثم سأل الطرف الآخر «مين معي؟» أو سؤالًا مشابهًا، عرّفي بنفسك وواصلي سبب التواصل السابق الظاهر في التاريخ؛ لا تعيدي تشغيل ترحيب خدمة العملاء ولا تسألي «كيف أساعدك؟».
+- في المحادثة الصادرة استخدمي حالة المحادثة وهدفها كذاكرة تشغيلية: افهمي الموافقة أو السؤال أو الاعتراض أو الرفض أو تغيير الموضوع بحرية، ونفّذي الوعد السابق قبل الانتقال للخطوة التالية.
+- عند الرفض الواضح أنهي بلطف واجعلي status في القرار opted_out. لا تستمري بالبيع ولا تحاولي التحايل على الرفض.
+- لا تقدمي خصمًا ترحيبيًا أو نسبة أو سعرًا إلا إذا ظهر صراحة في السياق الموثوق؛ عند غياب السعر اسألي عن الفئة أو استخدمي الرابط الرسمي المعتمد.
+- حدّثي next_stage وlast_commitment وcollected_info وفق معنى الحوار، لا وفق تطابق كلمات جامد.
 - اجعلي مكالماتك بشرية وقصيرة: جملة أو جملتان في كل دور، سؤال واحد واضح، ومن دون تكرار التعريف بنفسك.
 - استخدمي النية الحالية كحدود تشغيلية للرد، واختاري أقل خطوة تالية مفيدة.
 - لا تختلقي سعرًا أو عرضًا حاليًا أو حالة طلب أو موافقة استرجاع أو شرط شراكة إذا لم تكن المعلومة موجودة أمامك.
@@ -97,6 +130,8 @@ def build_vertex_payload(
     mode: str = "customer",
     intent: str = "general",
     trusted_context: str = "",
+    structured_output: bool = False,
+    correction: str = "",
 ) -> dict[str, Any]:
     customer_text = _normalized_text(text)
     if not customer_text:
@@ -116,6 +151,13 @@ def build_vertex_payload(
     )
     if context:
         runtime_context += f"\nTrusted operational context:\n{context}"
+    if structured_output:
+        runtime_context += (
+            "\nReturn the required JSON decision only. The reply must execute any prior commitment, remain complete, "
+            "and use only approved URLs from trusted context. Set last_commitment_fulfilled truthfully."
+        )
+    if correction:
+        runtime_context += f"\nCorrection required after a rejected draft: {_normalized_text(correction, 800)}"
 
     system_text = (
         f"{JOOD_SYSTEM_PROMPT.strip()}\n\n"
@@ -127,7 +169,7 @@ def build_vertex_payload(
     contents = _history_contents(history)
     contents.append({"role": "user", "parts": [{"text": customer_text}]})
 
-    return {
+    payload = {
         "systemInstruction": {"parts": [{"text": system_text}]},
         "contents": contents,
         "generationConfig": {
@@ -136,6 +178,10 @@ def build_vertex_payload(
             "topP": 0.95,
         },
     }
+    if structured_output:
+        payload["generationConfig"]["responseMimeType"] = "application/json"
+        payload["generationConfig"]["responseSchema"] = JOOD_RESPONSE_SCHEMA
+    return payload
 
 
 def extract_vertex_text(payload: dict[str, Any]) -> str:
@@ -151,6 +197,20 @@ def extract_vertex_text(payload: dict[str, Any]) -> str:
     if not text:
         raise JoodAIError("Vertex returned an empty reply")
     return text[:MAX_REPLY_CHARS]
+
+
+def extract_jood_decision(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = extract_vertex_text(payload)
+    try:
+        decision = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise JoodAIError("Vertex returned invalid decision JSON") from exc
+    if not isinstance(decision, dict):
+        raise JoodAIError("Vertex returned invalid decision object")
+    missing = [key for key in JOOD_RESPONSE_SCHEMA["required"] if key not in decision]
+    if missing or not isinstance(decision.get("reply"), str) or not decision["reply"].strip():
+        raise JoodAIError("Vertex decision is missing required fields")
+    return decision
 
 
 def _fetch_access_token(opener: Callable[..., Any]) -> str:
@@ -220,3 +280,46 @@ def generate_jood_reply(
     except (URLError, TimeoutError, OSError) as exc:
         raise JoodAIError("Vertex unavailable") from exc
     return extract_vertex_text(payload)
+
+
+def generate_jood_decision(
+    text: str,
+    history: Optional[Sequence[dict[str, Any]]] = None,
+    mode: str = "customer",
+    intent: str = "general",
+    trusted_context: str = "",
+    correction: str = "",
+    opener: Optional[Callable[..., Any]] = None,
+) -> dict[str, Any]:
+    http_open = opener or urlopen
+    access_token = _fetch_access_token(http_open)
+    body = json.dumps(
+        build_vertex_payload(
+            text,
+            history=history,
+            mode=mode,
+            intent=intent,
+            trusted_context=trusted_context,
+            structured_output=True,
+            correction=correction,
+        ),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = UrlRequest(
+        _vertex_url(),
+        data=body,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with http_open(request, timeout=25) as response:
+            payload = _decode_json_response(response)
+    except HTTPError as exc:
+        raise JoodAIError(f"Vertex HTTP {exc.code}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise JoodAIError("Vertex unavailable") from exc
+    return extract_jood_decision(payload)

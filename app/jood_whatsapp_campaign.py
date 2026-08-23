@@ -256,7 +256,7 @@ async def _deliver_campaign_dispatch(
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    remember_outreach_context(db, contact.id, mode, instruction, "campaign")
+    remember_outreach_context(db, contact.id, mode, instruction, "campaign", message)
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
     db.commit()
