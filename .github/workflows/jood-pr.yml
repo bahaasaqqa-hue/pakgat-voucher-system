@@ -42,5 +42,8 @@ jobs:
         run: |
           python -m py_compile main.py app/jood*.py app/whatsloop_inbound*.py app/whatsloop_security.py
 
+      - name: Import full application
+        run: python -c "import main; print('ROUTES=' + str(len(main.app.routes)))"
+
       - name: Run Jood regression tests
         run: python -m unittest discover -s tests -p 'test_jood_*.py' -v
