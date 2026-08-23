@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, Request
 from fastapi.routing import APIRoute
@@ -223,6 +224,30 @@ def _capture_order_payload(db: Session, payload: dict) -> None:
     db.commit()
 
 
+
+def _payload_with_order_items(payload: dict, items_payload: object) -> Optional[dict]:
+    """Return a copy of an order event enriched with Salla Order Items data."""
+    item_data = items_payload.get("data", items_payload) if isinstance(items_payload, dict) else items_payload
+    if isinstance(item_data, dict):
+        items = item_data.get("data") or item_data.get("items") or []
+    elif isinstance(item_data, list):
+        items = item_data
+    else:
+        items = []
+    items = [item for item in items if isinstance(item, dict)]
+    if not items:
+        return None
+
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        return None
+    enriched = dict(payload)
+    enriched_data = dict(data)
+    enriched_data["items"] = items
+    enriched["data"] = enriched_data
+    return enriched
+
+
 def salla_metrics(db: Session) -> dict:
     paid_statuses = ["paid", "completed", "success", "successful", "تم الدفع", "مدفوع"]
     final_statuses = ["closed", "completed", "fulfilled", "مكتمل", "مغلق", "تم التنفيذ"]
@@ -243,12 +268,13 @@ def salla_metrics(db: Session) -> dict:
         db.scalar(select(func.coalesce(func.sum(SallaOrderSnapshot.total_amount), 0.0)).where(confirmed_condition))
         or 0.0
     )
+    product_key = func.coalesce(
+        SallaOrderItemSnapshot.product_id,
+        SallaOrderItemSnapshot.sku,
+        SallaOrderItemSnapshot.product_name,
+    )
     products = int(
-        db.scalar(
-            select(func.count(func.distinct(SallaOrderItemSnapshot.product_id))).where(
-                SallaOrderItemSnapshot.product_id.is_not(None)
-            )
-        )
+        db.scalar(select(func.count(func.distinct(product_key))))
         or 0
     )
     units = int(db.scalar(select(func.coalesce(func.sum(SallaOrderItemSnapshot.quantity), 0))) or 0)
@@ -304,6 +330,33 @@ if _webhook_route is not None:
             try:
                 payload = json.loads(raw_body.decode("utf-8"))
                 _capture_order_payload(db, payload)
+
+                event = str(payload.get("event") or "").strip()
+                data = payload.get("data") or {}
+                order_id = _text(
+                    data if isinstance(data, dict) else {},
+                    "id",
+                    "order.id",
+                    "reference_id",
+                    "order.reference_id",
+                )
+                merchant_id = core.payload_merchant_id(payload)
+                if event.startswith("order.") and order_id and merchant_id:
+                    items_payload, items_error = core.fetch_salla_json_endpoint(
+                        db,
+                        "/orders/items?order_id=" + quote(order_id, safe=""),
+                        merchant_id,
+                    )
+                    if items_error:
+                        core.log_event(
+                            db,
+                            "salla_order_items_auto_sync_failed",
+                            details=f"order={order_id}; error={items_error[:220]}",
+                        )
+                    else:
+                        enriched = _payload_with_order_items(payload, items_payload)
+                        if enriched is not None:
+                            _capture_order_payload(db, enriched)
             except Exception as exc:
                 db.rollback()
                 core.log_event(
