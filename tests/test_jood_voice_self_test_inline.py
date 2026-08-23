@@ -1,5 +1,6 @@
 import unittest
 
+from app.jood_voice_live_bridge import build_live_voice_bridge_script
 from app.jood_voice_self_test_inline import (
     OLD_SELF_TEST_HANDLER,
     build_inline_local_self_test_handler,
@@ -28,7 +29,9 @@ class JoodInlineLocalSelfTestTests(unittest.TestCase):
         self.assertNotIn("startCall", handler)
 
     def test_rewrite_replaces_the_known_live_self_test_handler_in_place(self):
-        html = "<script>before\n" + OLD_SELF_TEST_HANDLER + "\nafter</script>"
+        live_script = build_live_voice_bridge_script(7)
+        self.assertIn(OLD_SELF_TEST_HANDLER, live_script)
+        html = "<script>" + live_script + "</script>"
         rewritten = rewrite_live_self_test_html(html)
         self.assertNotIn(OLD_SELF_TEST_HANDLER, rewritten)
         self.assertIn("اختبار محلي لصوت جود", rewritten)
