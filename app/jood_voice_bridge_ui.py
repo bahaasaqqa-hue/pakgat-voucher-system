@@ -299,7 +299,6 @@ def start_campaign_next_call(campaign_id: int, request: Request, db: Session = D
     return RedirectResponse(f"/admin/company/jood/voice/{session.id}/bridge", status_code=303)
 
 
-@core.app.get("/admin/company/jood/voice/{session_id}/bridge", response_class=HTMLResponse)
 def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(core.get_db)):
     redirect = _admin_redirect(request)
     if redirect:
@@ -310,7 +309,6 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
     contact = db.get(CompanyContact, session.contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    script = build_voice_bridge_script(session.id)
     label = contact.display_name or contact.business_name or ("Customer" if contact.contact_type == "customer" else "Merchant")
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
@@ -322,12 +320,22 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
         </div>
         <div class='alert' style='margin-top:16px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a'>
           <strong>رقم الاتصال عبر Phone Link:</strong> <span dir='ltr' style='font-size:20px'>{core.esc(contact.phone)}</span><br>
-          ابدأ الاتصال يدويًا من Phone Link، ثم اضغط «ابدأ استماع جود». Edge يجب أن يأخذ صوت الطرف الآخر من Voicemeeter، ويخرج صوته إلى AUX → B2.
+          اتصل يدويًا من Phone Link. بعد أن يرد الطرف الآخر اضغط «تشغيل جود» مرة واحدة؛ بعدها جود تتكلم وتستمع وترد تلقائيًا.
         </div>
-        <div id='voice-status' class='alert' style='margin-top:14px'>جارٍ فحص Zariyah...</div>
+        <div id='voice-status' class='alert' style='margin-top:14px'>جود جاهزة للفحص.</div>
+        <div class='card' style='padding:14px;margin-top:10px;background:#f8fafc'>
+          <strong>فحص جود قبل وأثناء المكالمة</strong>
+          <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px;font-size:14px'>
+            <div id='diagnostic-browser'>⏳ Chrome</div>
+            <div id='diagnostic-b1'>⏳ مدخل المكالمة</div>
+            <div id='diagnostic-signal'>⏳ صوت الطرف الآخر</div>
+            <div id='diagnostic-stt'>⏳ فهم الكلام</div>
+            <div id='diagnostic-tts'>⏳ صوت جود</div>
+          </div>
+        </div>
         <div style='display:flex;gap:8px;flex-wrap:wrap;margin:14px 0'>
-          <button id='start-listening' class='btn btn-blue' type='button'>ابدأ استماع جود</button>
-          <button id='stop-listening' class='btn btn-muted' type='button'>إيقاف</button>
+          <button id='start-jood' class='btn btn-blue' type='button'>تشغيل جود</button>
+          <button id='stop-listening' class='btn btn-muted' type='button'>إيقاف جود</button>
         </div>
         <div class='grid grid-mobile-1' style='grid-template-columns:1fr 1fr;gap:12px'>
           <div class='card' style='padding:16px'><strong>آخر كلام للطرف الآخر</strong><div id='voice-transcript' style='margin-top:8px;min-height:70px'></div></div>
@@ -343,10 +351,10 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
           <button class='btn btn-muted' type='button' onclick="finishJoodCall('human_handoff')">تدخل بشري</button>
           <button class='btn btn-danger' type='button' onclick="finishJoodCall('do_not_contact')">لا تتواصلوا معي</button>
         </div>
-        <p class='muted' style='margin-top:14px'>Voice target: {JOOD_VOICE_NAME}. لن يستخدم الجسر صوتًا آخر بصمت إذا لم تكن Zariyah متاحة داخل Edge Web Speech.</p>
+        <p class='muted' style='margin-top:14px'>المسار الصوتي: Voicemeeter B1 → Pakgat STT → Jood Core → Zariyah → Phone Link.</p>
       </section>
     </main>
-    <script>{script}</script>
+    <script src='/admin/company/jood/voice/{session.id}/runtime.js' defer></script>
     """
     return HTMLResponse(core.page_shell(f"جود Voice #{session.id}", body, admin=True))
 
