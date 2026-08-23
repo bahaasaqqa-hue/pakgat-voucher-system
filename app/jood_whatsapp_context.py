@@ -66,7 +66,11 @@ def remember_outreach_context(
         "last_commitment": infer_last_commitment(last_commitment),
         "collected_info": {},
         "presented_options": list(presented_options or []),
-        "selected_product_id": "",
+        "selected_product_id": (
+            str(presented_options[0].get("id") or "")[:100]
+            if presented_options and isinstance(presented_options[0], dict)
+            else ""
+        ),
         "status": "active",
     }
     row.updated_at = datetime.now(timezone.utc)

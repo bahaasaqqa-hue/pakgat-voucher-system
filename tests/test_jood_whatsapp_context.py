@@ -57,6 +57,7 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         )
         self.assertEqual(row.state_json["direction"], "outbound")
         self.assertEqual(row.state_json["persona"], "outbound_customer_sales")
+        self.assertEqual(row.state_json["selected_product_id"], "11")
         update_outreach_state(
             self.db,
             7,

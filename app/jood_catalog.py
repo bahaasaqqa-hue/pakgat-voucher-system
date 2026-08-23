@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import NamedTuple
 from urllib.parse import quote
 
@@ -23,6 +22,47 @@ class CatalogActionResult(NamedTuple):
     reply: str
     presented_options: list[dict[str, str]]
     approved_urls: set[str]
+
+
+def catalog_from_presented_options(options: object) -> list[CatalogItem]:
+    items: list[CatalogItem] = []
+    for option in options if isinstance(options, list) else []:
+        if not isinstance(option, dict):
+            continue
+        product_id = str(option.get("id") or "").strip()
+        name = str(option.get("name") or "").strip()
+        url = str(option.get("url") or "").strip()
+        if product_id and name and url.startswith("https://"):
+            items.append(CatalogItem(product_id, name, url, _amount(option.get("price"))))
+    return items
+
+
+def is_sales_consent(text: str) -> bool:
+    value = " ".join(str(text or "").strip().lower().split())
+    if not value or any(marker in value for marker in ("لا ترسل", "لاترسل", "ما أبغى", "ما ابغى")):
+        return False
+    exact = {"ارسل", "أرسل", "موافق", "تمام", "تفضل", "اوكي", "أوكي", "نعم", "ايه", "إيه"}
+    return value in exact or any(
+        marker in value for marker in ("ارسل لي", "أرسل لي", "ايه ارسل", "إيه أرسل", "أبشر ارسل")
+    )
+
+
+def enforce_sales_action(decision: dict, customer_text: str, state: dict | None) -> dict:
+    result = dict(decision or {})
+    if not is_sales_consent(customer_text):
+        return result
+    saved = dict(state or {})
+    selected = str(saved.get("selected_product_id") or "").strip()
+    if not selected:
+        options = saved.get("presented_options")
+        if isinstance(options, list) and options and isinstance(options[0], dict):
+            selected = str(options[0].get("id") or "").strip()
+    result["action"] = "send_product_link"
+    result["selected_option"] = selected
+    result["last_commitment_fulfilled"] = True
+    result["next_stage"] = "product_link_shared"
+    result["last_commitment"] = ""
+    return result
 
 
 def _amount(value) -> float:
@@ -61,6 +101,12 @@ def load_live_catalog(db: Session, limit: int = 30) -> list[CatalogItem]:
         f"/products?per_page={max(1, min(limit, 50))}&page=1&format=light",
         str(credential.merchant_id),
     )
+    if error:
+        payload, error = core.fetch_salla_json_endpoint(
+            db,
+            f"/products?per_page={max(1, min(limit, 50))}&page=1&format=light",
+            str(credential.merchant_id),
+        )
     items = [] if error else parse_salla_catalog(payload)
     if items:
         return items
@@ -108,6 +154,8 @@ def catalog_context(items: list[CatalogItem]) -> str:
 
 def _matches(item: CatalogItem, selected: str) -> bool:
     value = selected.lower().strip()
+    if value == item.id.lower() or value == item.name.lower():
+        return True
     aliases = {
         "هدايا": ("هدي", "gift"),
         "gifts": ("هدي", "gift"),
@@ -140,13 +188,19 @@ def execute_catalog_action(
             matches = items
         chosen = matches[:1] if action in {"send_product_link", "pitch_product"} else matches[:3]
 
-    options = [{"id": item.id, "name": item.name, "url": item.url} for item in chosen]
+    options = [
+        {"id": item.id, "name": item.name, "url": item.url, "price": str(item.price)}
+        for item in chosen
+    ]
     if chosen:
-        # The backend owns product URLs. Remove model-rendered copies first so
-        # the canonical raw link appears exactly once, at the message end.
-        for item in chosen:
-            reply = re.sub(re.escape(item.url), "", reply, flags=re.IGNORECASE)
-        reply = " ".join(reply.split()).strip()
+        # Product claims are backend-owned. Discard the model's sales copy so
+        # invented hotels, prices or benefits can never reach WhatsApp.
+        reply = (
+            "هذه عروض فعلية متاحة الآن في باكيجات، وتقدر تدفع عبر تمارا "
+            "وتستخدم كود VIP لخصم 5%."
+            if len(chosen) > 1
+            else "تفضل، هذا عرض فعلي متاح الآن في باكيجات. تقدر تدفع عبر تمارا وتستخدم كود VIP لخصم 5%."
+        )
         details = []
         for item in chosen:
             price = f" — {item.price:g} ر.س" if item.price else ""

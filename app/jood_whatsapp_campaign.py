@@ -266,7 +266,11 @@ async def _deliver_campaign_dispatch(
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    presented = (
+        [{"id": featured.id, "name": featured.name, "url": featured.url, "price": str(featured.price)}]
+        if featured
+        else []
+    )
     remember_outreach_context(
         db, contact.id, mode, instruction, "campaign", message, presented_options=presented
     )
@@ -497,7 +501,11 @@ async def send_next_whatsapp_campaign_contact(
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    presented = (
+        [{"id": featured.id, "name": featured.name, "url": featured.url, "price": str(featured.price)}]
+        if featured
+        else []
+    )
     remember_outreach_context(
         db, contact.id, mode, campaign.goal, "campaign", message, presented_options=presented
     )

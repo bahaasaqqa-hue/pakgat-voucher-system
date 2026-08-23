@@ -1,7 +1,15 @@
 import unittest
 from unittest.mock import patch
 
-from app.jood_catalog import CatalogItem, execute_catalog_action, load_live_catalog, parse_salla_catalog
+from app.jood_catalog import (
+    CatalogItem,
+    catalog_from_presented_options,
+    execute_catalog_action,
+    enforce_sales_action,
+    is_sales_consent,
+    load_live_catalog,
+    parse_salla_catalog,
+)
 
 
 class JoodCatalogTests(unittest.TestCase):
@@ -42,6 +50,40 @@ class JoodCatalogTests(unittest.TestCase):
         result = execute_catalog_action(decision, self.items)
         self.assertTrue(result.reply.endswith(self.items[0].url))
 
+    def test_arabic_sales_consent_is_detected_without_ai_guessing(self):
+        for text in ("ارسل", "أرسل", "موافق", "تمام", "تفضل", "ايه ارسل"):
+            self.assertTrue(is_sales_consent(text), text)
+        self.assertFalse(is_sales_consent("لا ترسل"))
+
+    def test_backend_replaces_hallucinated_offer_with_real_catalog_product(self):
+        decision = {
+            "action": "send_product_link",
+            "selected_option": "11",
+            "reply": "عرض ليلة في فندق فاخر مع إفطار لشخصين.",
+        }
+        result = execute_catalog_action(decision, self.items)
+        self.assertNotIn("فندق", result.reply)
+        self.assertNotIn("إفطار", result.reply)
+        self.assertIn(self.items[0].name, result.reply)
+        self.assertIn("تمارا", result.reply)
+        self.assertIn("VIP", result.reply)
+
+    def test_consent_forces_previous_product_link_and_fulfills_commitment(self):
+        model_decision = {
+            "action": "answer",
+            "reply": "هل تحب أرسل العرض؟",
+            "last_commitment_fulfilled": False,
+        }
+        state = {"selected_product_id": "11", "presented_options": [{"id": "11"}]}
+        decision = enforce_sales_action(model_decision, "ارسل", state)
+        self.assertEqual(decision["action"], "send_product_link")
+        self.assertEqual(decision["selected_option"], "11")
+        self.assertTrue(decision["last_commitment_fulfilled"])
+
+    def test_saved_real_product_is_available_when_salla_temporarily_fails(self):
+        options = [{"id": "11", "name": "بكج هدية عناية", "url": "https://pakgat.com/ar/p/11"}]
+        self.assertEqual(catalog_from_presented_options(options), [self.items[0]._replace(price=0)])
+
     def test_selecting_second_option_uses_saved_option_not_literal_guessing(self):
         decision = {"action": "send_selected_option", "selected_option": "2", "reply": "اختيار ممتاز."}
         previous = [{"id": "11", "name": "هدية", "url": "https://pakgat.com/ar/p/11"}, {"id": "22", "name": "سيارات", "url": "https://pakgat.com/ar/p/22"}]
@@ -71,6 +113,18 @@ class JoodCatalogTests(unittest.TestCase):
         ):
             items = load_live_catalog(FakeDB())
         self.assertEqual(items[0].name, "بكج هدية")
+
+    def test_catalog_retries_once_after_transient_salla_error(self):
+        credential = type("Credential", (), {"merchant_id": "650097422"})()
+        success = {
+            "data": [{"id": 11, "name": "بكج هدية", "price": {"amount": 99}, "urls": {"customer": "https://pakgat.com/ar/p/11"}}]
+        }
+        with patch("app.jood_catalog.core.latest_salla_credential", return_value=credential), patch(
+            "app.jood_catalog.core.fetch_salla_json_endpoint",
+            side_effect=[(None, "temporary"), (success, None)],
+        ):
+            items = load_live_catalog(object())
+        self.assertEqual(items[0].id, "11")
 
 
 if __name__ == "__main__":

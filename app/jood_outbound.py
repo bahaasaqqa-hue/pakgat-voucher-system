@@ -216,7 +216,11 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    presented = (
+        [{"id": featured.id, "name": featured.name, "url": featured.url, "price": str(featured.price)}]
+        if featured
+        else []
+    )
     remember_outreach_context(
         db, contact.id, mode, goal, "individual", message, presented_options=presented
     )

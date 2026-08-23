@@ -31,7 +31,13 @@ from app.jood_company_ops import (
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
 from app.jood_reply_validation import validate_and_clean_reply
-from app.jood_catalog import catalog_context, execute_catalog_action, load_live_catalog
+from app.jood_catalog import (
+    catalog_context,
+    catalog_from_presented_options,
+    enforce_sales_action,
+    execute_catalog_action,
+    load_live_catalog,
+)
 from app.jood_sales_playbook import SALES_FACTS, sales_opening_fallback
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
@@ -234,6 +240,8 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             direction = str(state.get("direction") or "inbound")
             last_commitment = str(state.get("last_commitment") or "")
             catalog = load_live_catalog(db) if direction == "outbound" and mode == "customer" else []
+            if not catalog and direction == "outbound" and mode == "customer":
+                catalog = catalog_from_presented_options(state.get("presented_options"))
             approved_urls = {item.url for item in catalog}
             if catalog:
                 trusted_context += "\n" + SALES_FACTS
@@ -291,6 +299,8 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                     correction = str(exc)
                     decision = None
                     continue
+                if direction == "outbound" and mode == "customer":
+                    decision = enforce_sales_action(decision, normalized.text or "", state)
                 catalog_result = execute_catalog_action(
                     decision,
                     catalog,
