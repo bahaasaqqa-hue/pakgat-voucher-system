@@ -85,11 +85,12 @@ def catalog_from_presented_options(options: object) -> list[CatalogItem]:
     return items
 
 
-def strict_product_message(product: CatalogItem) -> str:
+def strict_product_message(product: CatalogItem, coupon_code: str = "VIP") -> str:
     return (
-        f"أهلاً بك! أبشر، تفضل رابط العرض المباشر لـ {product.name}:\n"
-        f"{product.url}\n"
-        "استخدم كود الخصم: VIP"
+        "بدون قروشة.. أهلاً بك في باكيجات! 🌸\n\n"
+        f"أبشر بعزك، هذا رابط العرض المباشر لـ {product.name}:\n"
+        f"🔗 {product.url}\n\n"
+        f"خصمك يضبطك مع كود: {coupon_code} 🚀"
     )
 
 
