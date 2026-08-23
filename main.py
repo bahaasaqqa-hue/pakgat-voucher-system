@@ -30,6 +30,7 @@ from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 
 from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - Pakgat AI visual/control experience
 from app import ai_company_mission_control_ui as _ai_company_mission_control_ui  # noqa: F401 - Mission Control home, AI Core, command bar and intelligence panels
 from app import jood_company_control_ui as _jood_company_control_ui  # noqa: F401 - unified Customer/Merchant WhatsApp/Voice control center
+from app import jood_whatsapp_campaign_ui as _jood_whatsapp_campaign_ui  # noqa: F401 - Jood WhatsApp campaign control page
 from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operations entry in Pakgat AI navigation
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
