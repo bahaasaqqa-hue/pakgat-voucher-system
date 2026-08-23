@@ -36,6 +36,13 @@ class JoodVoiceBridgeUITests(unittest.TestCase):
         self.assertNotIn("speechSynthesis.speak", script)
         self.assertNotIn("SpeechSynthesisUtterance", script)
 
+    def test_bridge_is_chrome_first_and_has_visible_running_state(self):
+        script = build_live_voice_bridge_script(7)
+        self.assertIn("Chrome", script)
+        self.assertIn("startBtn.textContent = 'جود تعمل الآن'", script)
+        self.assertIn("startBtn.textContent = 'إعادة تشغيل جود'", script)
+        self.assertNotIn("Microsoft Edge", script)
+
     def test_server_stt_module_is_present(self):
         self.assertIsNotNone(importlib.util.find_spec("app.jood_voice_server_stt"))
 
