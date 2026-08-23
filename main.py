@@ -25,6 +25,7 @@ from app import jood_outbound as _jood_outbound  # noqa: F401 - Company AI outbo
 from app import jood_whatsapp_campaign as _jood_whatsapp_campaign  # noqa: F401 - queued outbound WhatsApp campaigns
 from app import jood_voice_bridge_ui as _jood_voice_bridge_ui  # noqa: F401 - half-duplex Phone Link/Voicemeeter voice bridge
 from app import jood_voice_server_tts as _jood_voice_server_tts  # noqa: F401 - server-backed Zariyah playback for Edge/Voicemeeter
+from app import jood_voice_live_bridge as _jood_voice_live_bridge  # noqa: F401 - explicit Voicemeeter B1 capture + automatic Jood call opening
 from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corporate DB/admin base
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
