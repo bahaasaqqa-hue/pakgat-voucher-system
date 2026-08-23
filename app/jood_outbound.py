@@ -23,7 +23,12 @@ from app.jood_company_ops import (
     trusted_context_for,
 )
 from app.jood_policy import sanitize_jood_reply
-from app.jood_catalog import catalog_context, choose_featured_product, load_live_catalog
+from app.jood_catalog import (
+    catalog_context,
+    choose_featured_product,
+    load_live_catalog,
+    strict_product_message,
+)
 from app.jood_sales_playbook import featured_product_context, sales_opening_fallback
 from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
@@ -61,6 +66,8 @@ def build_contact_outreach_context(contact, instruction: str) -> str:
 
 def ensure_outbound_opening(message: str, mode: str, contact, featured_product=None) -> str:
     """Prevent a first-touch outreach from degrading into an inbound help greeting."""
+    if str(mode or "").strip().lower() == "customer" and featured_product is not None:
+        return strict_product_message(featured_product)
     clean = " ".join(str(message or "").strip().split())
     lowered = clean.lower()
     outbound_markers = ("أتواصل مع", "نتواصل مع", "تواصلنا مع", "فرصة تعاون", "عرض خاص")
@@ -183,18 +190,23 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         trusted += "\n" + featured_product_context(featured)
         trusted += "\n" + catalog_context(catalog)
 
-    try:
-        generated = await asyncio.to_thread(
-            generate_jood_reply,
-            goal,
-            history,
-            mode,
-            intent,
-            trusted,
-        )
-    except JoodAIError as exc:
-        core.log_event(db, "jood_outbound_ai_failed", details=f"contact={contact.id}; error={str(exc)[:160]}")
-        raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
+    if mode == "customer":
+        if featured is None:
+            raise HTTPException(status_code=503, detail="No approved Salla product is currently available")
+        generated = strict_product_message(featured)
+    else:
+        try:
+            generated = await asyncio.to_thread(
+                generate_jood_reply,
+                goal,
+                history,
+                mode,
+                intent,
+                trusted,
+            )
+        except JoodAIError as exc:
+            core.log_event(db, "jood_outbound_ai_failed", details=f"contact={contact.id}; error={str(exc)[:160]}")
+            raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
     approved_urls = {item.url for item in catalog}
     message = sanitize_jood_reply(generated, customer_text=goal, approved_urls=approved_urls)

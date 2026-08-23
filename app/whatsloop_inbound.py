@@ -36,9 +36,11 @@ from app.jood_catalog import (
     catalog_from_presented_options,
     enforce_sales_action,
     execute_catalog_action,
+    is_sales_consent,
     load_live_catalog,
+    strict_product_message,
 )
-from app.jood_sales_playbook import SALES_FACTS, sales_opening_fallback
+from app.jood_sales_playbook import SALES_FACTS
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
@@ -284,23 +286,42 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             validation = None
             catalog_result = None
             correction = ""
-            for _attempt in range(2):
-                try:
-                    decision = await asyncio.to_thread(
-                        generate_jood_decision,
+            deterministic_sale = (
+                direction == "outbound"
+                and mode == "customer"
+                and is_sales_consent(normalized.text or "")
+            )
+            attempts = 1 if deterministic_sale else 2
+            for _attempt in range(attempts):
+                if deterministic_sale:
+                    decision = enforce_sales_action(
+                        {
+                            "reply": "",
+                            "detected_intent": "accepted_offer",
+                            "next_stage": "product_link_shared",
+                            "last_commitment_fulfilled": True,
+                            "handoff_required": False,
+                            "action": "send_product_link",
+                            "selected_option": "",
+                        },
                         normalized.text or "",
-                        history,
-                        mode,
-                        intent,
-                        trusted_context,
-                        correction,
+                        state,
                     )
-                except JoodAIError as exc:
-                    correction = str(exc)
-                    decision = None
-                    continue
-                if direction == "outbound" and mode == "customer":
-                    decision = enforce_sales_action(decision, normalized.text or "", state)
+                else:
+                    try:
+                        decision = await asyncio.to_thread(
+                            generate_jood_decision,
+                            normalized.text or "",
+                            history,
+                            mode,
+                            intent,
+                            trusted_context,
+                            correction,
+                        )
+                    except JoodAIError as exc:
+                        correction = str(exc)
+                        decision = None
+                        continue
                 catalog_result = execute_catalog_action(
                     decision,
                     catalog,
@@ -322,7 +343,11 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 if direction == "outbound" and mode == "merchant":
                     generated_reply = "أعتذر عن الرد السابق. معك جود من باكيجات بخصوص فرصة الشراكة؛ أرسل لي اسم النشاط والمدينة ونوع الخدمات لأوضح لكم الخطوة المناسبة."
                 elif direction == "outbound":
-                    generated_reply = sales_opening_fallback(contact, catalog[0] if catalog else None)
+                    generated_reply = (
+                        strict_product_message(catalog[0])
+                        if catalog
+                        else "تعذر تحميل العرض المعتمد الآن. سأعيد المحاولة عند توفر كتالوج سلة."
+                    )
                 else:
                     generated_reply = "أعتذر، لم يكتمل الرد. اكتب لي طلبك مرة أخرى باختصار وسأساعدك مباشرة."
             else:

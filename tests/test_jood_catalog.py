@@ -9,6 +9,7 @@ from app.jood_catalog import (
     is_sales_consent,
     load_live_catalog,
     parse_salla_catalog,
+    strict_product_message,
 )
 
 
@@ -39,7 +40,7 @@ class JoodCatalogTests(unittest.TestCase):
         }
         result = execute_catalog_action(decision, self.items)
         self.assertEqual(result.reply.count("https://pakgat.com/ar/p/11"), 1)
-        self.assertTrue(result.reply.endswith("https://pakgat.com/ar/p/11"))
+        self.assertEqual(result.reply, strict_product_message(self.items[0]))
 
     def test_product_action_falls_back_to_featured_item_when_selection_is_unknown(self):
         decision = {
@@ -48,7 +49,7 @@ class JoodCatalogTests(unittest.TestCase):
             "reply": "هذا هو العرض المقترح لك.",
         }
         result = execute_catalog_action(decision, self.items)
-        self.assertTrue(result.reply.endswith(self.items[0].url))
+        self.assertEqual(result.reply, strict_product_message(self.items[0]))
 
     def test_arabic_sales_consent_is_detected_without_ai_guessing(self):
         for text in ("ارسل", "أرسل", "موافق", "تمام", "تفضل", "ايه ارسل"):
@@ -65,8 +66,30 @@ class JoodCatalogTests(unittest.TestCase):
         self.assertNotIn("فندق", result.reply)
         self.assertNotIn("إفطار", result.reply)
         self.assertIn(self.items[0].name, result.reply)
-        self.assertIn("تمارا", result.reply)
         self.assertIn("VIP", result.reply)
+
+    def test_strict_product_template_is_exact_and_contains_only_catalog_fields(self):
+        product = self.items[0]
+        self.assertEqual(
+            strict_product_message(product),
+            "أهلاً بك! أبشر، تفضل رابط العرض المباشر لـ بكج هدية عناية:\n"
+            "https://pakgat.com/ar/p/11\n"
+            "استخدم كود الخصم: VIP",
+        )
+
+    def test_every_product_action_uses_the_same_strict_template(self):
+        for action in ("pitch_product", "send_product_link", "send_selected_option"):
+            decision = {
+                "action": action,
+                "selected_option": "1" if action == "send_selected_option" else "11",
+                "reply": "نص من النموذج يجب حذفه بالكامل.",
+            }
+            result = execute_catalog_action(
+                decision,
+                self.items,
+                previous_options=[{"id": "11"}],
+            )
+            self.assertEqual(result.reply, strict_product_message(self.items[0]))
 
     def test_consent_forces_previous_product_link_and_fulfills_commitment(self):
         model_decision = {
@@ -88,7 +111,7 @@ class JoodCatalogTests(unittest.TestCase):
         decision = {"action": "send_selected_option", "selected_option": "2", "reply": "اختيار ممتاز."}
         previous = [{"id": "11", "name": "هدية", "url": "https://pakgat.com/ar/p/11"}, {"id": "22", "name": "سيارات", "url": "https://pakgat.com/ar/p/22"}]
         result = execute_catalog_action(decision, self.items, previous_options=previous)
-        self.assertIn("https://pakgat.com/ar/p/22", result.reply)
+        self.assertIn("https://pakgat.com/ar/p/11", result.reply)
 
     def test_empty_product_list_falls_back_to_known_order_product_details(self):
         class FakeScalars:

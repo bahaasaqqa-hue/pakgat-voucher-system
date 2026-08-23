@@ -3,6 +3,7 @@ import unittest
 
 from app.jood_ai import JOOD_RESPONSE_SCHEMA, build_vertex_payload, extract_jood_decision
 from app.jood_reply_validation import validate_and_clean_reply
+from app.jood_catalog import CatalogItem, strict_product_message
 
 
 class JoodStructuredDialogueTests(unittest.TestCase):
@@ -100,6 +101,17 @@ class JoodStructuredDialogueTests(unittest.TestCase):
         )
         self.assertTrue(result.ok)
         self.assertIn(product_url, result.reply)
+
+    def test_accepts_exact_strict_sales_template_ending_in_vip(self):
+        product = CatalogItem("11", "كوبون غسيل", "https://pakgat.com/ar/p/11", 17.25)
+        result = validate_and_clean_reply(
+            strict_product_message(product),
+            direction="outbound",
+            last_commitment="إرسال الرابط",
+            commitment_fulfilled=True,
+            approved_urls={product.url},
+        )
+        self.assertTrue(result.ok, result.reason)
 
 
 if __name__ == "__main__":

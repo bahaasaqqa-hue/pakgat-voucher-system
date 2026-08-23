@@ -37,6 +37,14 @@ def catalog_from_presented_options(options: object) -> list[CatalogItem]:
     return items
 
 
+def strict_product_message(product: CatalogItem) -> str:
+    return (
+        f"أهلاً بك! أبشر، تفضل رابط العرض المباشر لـ {product.name}:\n"
+        f"{product.url}\n"
+        "استخدم كود الخصم: VIP"
+    )
+
+
 def is_sales_consent(text: str) -> bool:
     value = " ".join(str(text or "").strip().lower().split())
     if not value or any(marker in value for marker in ("لا ترسل", "لاترسل", "ما أبغى", "ما ابغى")):
@@ -177,35 +185,17 @@ def execute_catalog_action(
     selected = str(decision.get("selected_option") or "").strip()
     reply = str(decision.get("reply") or "").strip()
     chosen: list[CatalogItem] = []
-    if action == "send_selected_option" and selected.isdigit() and previous_options:
-        index = int(selected) - 1
-        if 0 <= index < len(previous_options):
-            option_id = str(previous_options[index].get("id") or "")
-            chosen = [item for item in items if item.id == option_id][:1]
-    elif action in {"send_catalog_options", "send_product_link", "pitch_product"}:
-        matches = [item for item in items if _matches(item, selected)] if selected else items
-        if not matches:
-            matches = items
-        chosen = matches[:1] if action in {"send_product_link", "pitch_product"} else matches[:3]
+    if action in {"send_selected_option", "send_catalog_options", "send_product_link", "pitch_product"}:
+        # Product selection is intentionally deterministic: the approved first
+        # live catalog product is the only product a sales message may expose.
+        chosen = items[:1]
 
     options = [
         {"id": item.id, "name": item.name, "url": item.url, "price": str(item.price)}
         for item in chosen
     ]
     if chosen:
-        # Product claims are backend-owned. Discard the model's sales copy so
-        # invented hotels, prices or benefits can never reach WhatsApp.
-        reply = (
-            "هذه عروض فعلية متاحة الآن في باكيجات، وتقدر تدفع عبر تمارا "
-            "وتستخدم كود VIP لخصم 5%."
-            if len(chosen) > 1
-            else "تفضل، هذا عرض فعلي متاح الآن في باكيجات. تقدر تدفع عبر تمارا وتستخدم كود VIP لخصم 5%."
-        )
-        details = []
-        for item in chosen:
-            price = f" — {item.price:g} ر.س" if item.price else ""
-            details.append(f"{item.name}{price}\n{item.url}")
-        reply = (reply.rstrip() + "\n\n" + "\n\n".join(details)).strip()
+        reply = strict_product_message(chosen[0])
     elif action in {"send_catalog_options", "send_product_link", "pitch_product"}:
         reply = (reply.rstrip() + f"\n{PAKGAT_HOME_URL}").strip()
     approved = {PAKGAT_HOME_URL, *(item.url for item in items)}

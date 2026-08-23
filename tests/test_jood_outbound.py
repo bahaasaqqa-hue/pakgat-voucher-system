@@ -8,6 +8,7 @@ from app.jood_outbound import (
     outbound_intent_for,
     outbound_instruction_context,
 )
+from app.jood_catalog import CatalogItem, strict_product_message
 
 
 class JoodOutboundTests(unittest.TestCase):
@@ -52,6 +53,12 @@ class JoodOutboundTests(unittest.TestCase):
         contact = SimpleNamespace(display_name="سارة", business_name="مركز سارة")
         message = "السلام عليكم أستاذة سارة، معك جود من باكيجات. أتواصل معك لعرض فرصة تعاون مناسبة لمركز سارة، هل يناسبك أرسل التفاصيل؟"
         self.assertEqual(ensure_outbound_opening(message, "merchant", contact), message)
+
+    def test_customer_opening_is_always_the_strict_catalog_template(self):
+        contact = SimpleNamespace(display_name="بهاء", business_name=None)
+        product = CatalogItem("11", "كوبون غسيل", "https://pakgat.com/ar/p/11", 17.25)
+        result = ensure_outbound_opening("نص مبيعات من النموذج", "customer", contact, product)
+        self.assertEqual(result, strict_product_message(product))
 
 
 if __name__ == "__main__":

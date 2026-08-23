@@ -31,7 +31,12 @@ from app.jood_policy import sanitize_jood_reply
 from app.jood_whatsapp_import import ImportedContact, parse_contact_upload
 from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
-from app.jood_catalog import catalog_context, choose_featured_product, load_live_catalog
+from app.jood_catalog import (
+    catalog_context,
+    choose_featured_product,
+    load_live_catalog,
+    strict_product_message,
+)
 from app.jood_sales_playbook import featured_product_context
 
 
@@ -228,14 +233,19 @@ async def _deliver_campaign_dispatch(
         trusted += "\n" + featured_product_context(featured)
         trusted += "\n" + catalog_context(catalog)
     try:
-        generated = await asyncio.to_thread(
-            generate_jood_reply,
-            instruction,
-            history,
-            mode,
-            outbound_intent_for(mode),
-            trusted,
-        )
+        if mode == "customer":
+            if featured is None:
+                raise RuntimeError("No approved Salla product is currently available")
+            generated = strict_product_message(featured)
+        else:
+            generated = await asyncio.to_thread(
+                generate_jood_reply,
+                instruction,
+                history,
+                mode,
+                outbound_intent_for(mode),
+                trusted,
+            )
         approved_urls = {item.url for item in catalog}
         message = ensure_outbound_opening(
             sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
@@ -456,14 +466,19 @@ async def send_next_whatsapp_campaign_contact(
         trusted += "\n" + catalog_context(catalog)
 
     try:
-        generated = await asyncio.to_thread(
-            generate_jood_reply,
-            campaign.goal,
-            history,
-            mode,
-            intent,
-            trusted,
-        )
+        if mode == "customer":
+            if featured is None:
+                raise JoodAIError("No approved Salla product is currently available")
+            generated = strict_product_message(featured)
+        else:
+            generated = await asyncio.to_thread(
+                generate_jood_reply,
+                campaign.goal,
+                history,
+                mode,
+                intent,
+                trusted,
+            )
     except JoodAIError as exc:
         core.log_event(
             db,
