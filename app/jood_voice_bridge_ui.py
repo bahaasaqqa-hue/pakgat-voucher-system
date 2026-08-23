@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import application as core
@@ -95,140 +93,6 @@ def _contact_context(contact: CompanyContact, campaign: JoodCallCampaign | None,
     return context
 
 
-def build_voice_bridge_script(session_id: int) -> str:
-    turn_url = f"/admin/company/jood/voice/{int(session_id)}/turn"
-    finish_url = f"/admin/company/jood/voice/{int(session_id)}/finish"
-    return f"""
-const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let speaking = false;
-let started = false;
-const statusEl = document.getElementById('voice-status');
-const transcriptEl = document.getElementById('voice-transcript');
-const replyEl = document.getElementById('voice-reply');
-const startBtn = document.getElementById('start-listening');
-const stopBtn = document.getElementById('stop-listening');
-
-function allVoices() {{ return window.speechSynthesis ? speechSynthesis.getVoices() : []; }}
-function zariyahVoice() {{
-  return allVoices().find(v => /Zariyah/i.test(v.name || '') && /^ar-SA/i.test(v.lang || '')) || null;
-}}
-function voiceIsZariyah(v) {{ return !!(v && /Zariyah/i.test(v.name || '') && /^ar-SA/i.test(v.lang || '')); }}
-
-function updateVoiceStatus() {{
-  const voice = zariyahVoice();
-  if (voiceIsZariyah(voice)) {{
-    statusEl.textContent = 'Zariyah جاهزة · ar-SA · نصف مزدوج';
-    statusEl.dataset.voiceReady = '1';
-  }} else {{
-    statusEl.textContent = 'Zariyah غير متوفرة داخل Web Speech API على هذا الجهاز. لن يتم الادعاء باستخدامها أو تبديل الهوية بصمت.';
-    statusEl.dataset.voiceReady = '0';
-  }}
-}}
-if (window.speechSynthesis) {{
-  speechSynthesis.onvoiceschanged = updateVoiceStatus;
-  updateVoiceStatus();
-}}
-
-async function sendTurn(text) {{
-  const response = await fetch('{turn_url}', {{
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{text}})
-  }});
-  if (!response.ok) throw new Error('Voice turn failed: ' + response.status);
-  return await response.json();
-}}
-
-function speakReply(text) {{
-  return new Promise((resolve, reject) => {{
-    const voice = zariyahVoice();
-    if (!voiceIsZariyah(voice)) {{
-      statusEl.textContent = 'Zariyah غير متوفرة — أوقفنا التشغيل بدل استخدام صوت مختلف بدون إذنك.';
-      reject(new Error('Zariyah unavailable'));
-      return;
-    }}
-    speaking = true;
-    if (recognition) recognition.stop();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = voice;
-    utterance.lang = 'ar-SA';
-    utterance.rate = 0.98;
-    utterance.pitch = 1.0;
-    utterance.onstart = () => {{ statusEl.textContent = 'جود تتكلم الآن...'; }};
-    utterance.onend = () => {{
-      speaking = false;
-      statusEl.textContent = 'جود انتهت؛ أستمع للطرف الآخر.';
-      if (started) startRecognition();
-      resolve();
-    }};
-    utterance.onerror = e => {{ speaking = false; reject(e); }};
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utterance);
-  }});
-}}
-
-function startRecognition() {{
-  if (!Recognition || speaking || !started) return;
-  recognition = new Recognition();
-  recognition.lang = 'ar-SA';
-  recognition.continuous = false;
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-  recognition.onstart = () => {{ statusEl.textContent = 'أستمع للطرف الآخر...'; }};
-  recognition.onresult = async event => {{
-    const text = (event.results[0][0].transcript || '').trim();
-    if (!text) return;
-    recognition.stop();
-    transcriptEl.textContent = text;
-    statusEl.textContent = 'جود تفهم الرسالة وتجهز الرد...';
-    try {{
-      const data = await sendTurn(text);
-      replyEl.textContent = data.reply || '';
-      await speakReply(data.reply || '');
-    }} catch (err) {{
-      statusEl.textContent = 'تعذر إكمال الدور الصوتي: ' + err.message;
-    }}
-  }};
-  recognition.onerror = event => {{
-    if (started && !speaking && event.error !== 'aborted') statusEl.textContent = 'خطأ استماع: ' + event.error;
-  }};
-  recognition.onend = () => {{
-    if (started && !speaking && statusEl.textContent.includes('أستمع')) setTimeout(startRecognition, 300);
-  }};
-  try {{ recognition.start(); }} catch (e) {{ /* already started */ }}
-}}
-
-startBtn.addEventListener('click', () => {{
-  if (!Recognition) {{ statusEl.textContent = 'SpeechRecognition غير متاح في هذا المتصفح. استخدم Microsoft Edge.'; return; }}
-  started = true;
-  startRecognition();
-}});
-stopBtn.addEventListener('click', () => {{
-  started = false;
-  if (recognition) recognition.stop();
-  if (window.speechSynthesis) speechSynthesis.cancel();
-  statusEl.textContent = 'متوقف.';
-}});
-
-async function finishCall(outcome) {{
-  started = false;
-  if (recognition) recognition.stop();
-  if (window.speechSynthesis) speechSynthesis.cancel();
-  const response = await fetch('{finish_url}', {{
-    method: 'POST', credentials: 'same-origin', headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify({{outcome}})
-  }});
-  const data = await response.json();
-  if (!response.ok) {{ statusEl.textContent = data.detail || 'تعذر إغلاق المكالمة'; return; }}
-  statusEl.textContent = 'تم حفظ Call Log: ' + (data.outcome || outcome);
-  if (data.summary) replyEl.textContent = data.summary;
-}}
-window.finishJoodCall = finishCall;
-""".strip()
-
-
 @core.app.post("/admin/company/jood/campaigns")
 async def create_call_campaign(request: Request, db: Session = Depends(core.get_db)):
     redirect = _admin_redirect(request)
@@ -310,8 +174,13 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
     contact = db.get(CompanyContact, session.contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    script = build_voice_bridge_script(session.id)
+
+    # Lazy import avoids a module cycle: live_bridge uses append_transcript_line above.
+    from app.jood_voice_live_bridge import build_live_voice_bridge_script
+
+    script = build_live_voice_bridge_script(session.id)
     label = contact.display_name or contact.business_name or ("Customer" if contact.contact_type == "customer" else "Merchant")
+    self_test_url = f"/admin/company/jood/voice/{session.id}/self-test"
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <section class='card' style='padding:24px;max-width:980px;margin:auto'>
@@ -320,19 +189,35 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
           <p class='muted'>النوع: {core.esc(contact.contact_type)} · الجهة: {core.esc(label)}</p></div>
           <a class='btn btn-muted' href='/admin/company/jood'>رجوع إلى مركز جود</a>
         </div>
+
         <div class='alert' style='margin-top:16px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a'>
           <strong>رقم الاتصال عبر Phone Link:</strong> <span dir='ltr' style='font-size:20px'>{core.esc(contact.phone)}</span><br>
-          ابدأ الاتصال يدويًا من Phone Link، ثم اضغط «ابدأ استماع جود». Edge يجب أن يأخذ صوت الطرف الآخر من Voicemeeter، ويخرج صوته إلى AUX → B2.
+          اتصل يدويًا من Phone Link في Google Chrome. بعد أن يرد الطرف الآخر اضغط «تشغيل جود» مرة واحدة؛ بعدها جود تتكلم وتستمع وترد تلقائيًا.
         </div>
-        <div id='voice-status' class='alert' style='margin-top:14px'>جارٍ فحص Zariyah...</div>
+
+        <div id='voice-status' class='alert' style='margin-top:14px'>جود جاهزة للفحص.</div>
+        <div class='card' style='padding:14px;margin-top:10px;background:#f8fafc'>
+          <strong>فحص مسار المكالمة</strong>
+          <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px;font-size:14px'>
+            <div id='diagnostic-browser'>⏳ Chrome</div>
+            <div id='diagnostic-b1'>⏳ مدخل المكالمة</div>
+            <div id='diagnostic-signal'>⏳ صوت الطرف الآخر</div>
+            <div id='diagnostic-stt'>⏳ فهم الكلام</div>
+            <div id='diagnostic-tts'>⏳ صوت جود</div>
+          </div>
+        </div>
+
         <div style='display:flex;gap:8px;flex-wrap:wrap;margin:14px 0'>
-          <button id='start-listening' class='btn btn-blue' type='button'>ابدأ استماع جود</button>
-          <button id='stop-listening' class='btn btn-muted' type='button'>إيقاف</button>
+          <a class='btn btn-muted' href='{self_test_url}' target='_blank' rel='noopener'>اختبار صوت جود (صفحة مستقلة)</a>
+          <button id='start-jood' class='btn btn-blue' type='button'>تشغيل جود</button>
+          <button id='stop-listening' class='btn btn-muted' type='button'>إيقاف جود</button>
         </div>
+
         <div class='grid grid-mobile-1' style='grid-template-columns:1fr 1fr;gap:12px'>
           <div class='card' style='padding:16px'><strong>آخر كلام للطرف الآخر</strong><div id='voice-transcript' style='margin-top:8px;min-height:70px'></div></div>
           <div class='card' style='padding:16px'><strong>آخر رد لجود</strong><div id='voice-reply' style='margin-top:8px;min-height:70px'></div></div>
         </div>
+
         <h3 style='margin-top:20px'>إنهاء المكالمة وحفظ Call Log</h3>
         <div style='display:flex;gap:7px;flex-wrap:wrap'>
           <button class='btn btn-blue' type='button' onclick="finishJoodCall('interested')">مهتم</button>
@@ -343,7 +228,7 @@ def voice_bridge_page(session_id: int, request: Request, db: Session = Depends(c
           <button class='btn btn-muted' type='button' onclick="finishJoodCall('human_handoff')">تدخل بشري</button>
           <button class='btn btn-danger' type='button' onclick="finishJoodCall('do_not_contact')">لا تتواصلوا معي</button>
         </div>
-        <p class='muted' style='margin-top:14px'>Voice target: {JOOD_VOICE_NAME}. لن يستخدم الجسر صوتًا آخر بصمت إذا لم تكن Zariyah متاحة داخل Edge Web Speech.</p>
+        <p class='muted' style='margin-top:14px'>المسار الصوتي للمكالمة: Voicemeeter B1 → Pakgat STT → Jood Core → {JOOD_VOICE_NAME} → Chrome/Phone Link عبر مسار AUX/B2 الحالي.</p>
       </section>
     </main>
     <script>{script}</script>
