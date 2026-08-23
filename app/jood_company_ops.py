@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import parse_qs
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import DateTime, Integer, String, Text, select
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
@@ -14,6 +15,17 @@ from app.jood_policy import CAR_CARE_URL, PAKGAT_HOME_URL
 
 CONTACT_TYPES = {"customer", "merchant"}
 CONTACT_STATUSES = {"active", "do_not_contact"}
+CALL_COOLDOWN_SECONDS = 30
+CALL_OUTCOMES = {
+    "interested",
+    "follow_up",
+    "not_interested",
+    "no_answer",
+    "busy",
+    "human_handoff",
+    "do_not_contact",
+    "failed",
+}
 MERCHANT_STAGES = {
     "new",
     "contacted",
@@ -76,6 +88,66 @@ class JoodHandoff(core.Base):
     )
 
 
+class JoodCallCampaign(core.Base):
+    __tablename__ = "jood_call_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255))
+    contact_type: Mapped[str] = mapped_column(String(20), index=True)
+    goal: Mapped[str] = mapped_column(Text)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    transcript_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
+class JoodCallSession(core.Base):
+    __tablename__ = "jood_call_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    campaign_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    transcript: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
+class JoodCallLog(core.Base):
+    __tablename__ = "jood_call_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    campaign_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    contact_type: Mapped[str] = mapped_column(String(20), index=True)
+    contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str] = mapped_column(String(40))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    outcome: Mapped[str] = mapped_column(String(40), index=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    transcript: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    human_follow_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    do_not_contact: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 def _digits(value: str) -> str:
     return re.sub(r"\D", "", str(value or ""))
 
@@ -113,6 +185,21 @@ def infer_contact_type(text: str) -> str:
 
 def can_contact(contact) -> bool:
     return str(getattr(contact, "status", "") or "").strip().lower() != "do_not_contact"
+
+
+def conversation_key_for(
+    channel: str,
+    contact_id: int,
+    *,
+    chat_id: str = "",
+    sender: str = "",
+) -> str:
+    clean_channel = (channel or "unknown").strip().lower()
+    if clean_channel == "whatsapp" and str(chat_id or "").endswith("@g.us"):
+        return f"whatsapp:{chat_id}:{sender or contact_id}"
+    if clean_channel == "whatsapp":
+        return f"whatsapp:{contact_id}"
+    return f"{clean_channel}:{contact_id}"
 
 
 def route_jood_intent(text: str, mode: str) -> str:
@@ -279,12 +366,101 @@ def create_handoff(db: Session, contact_id: int, kind: str, details: str = "") -
     return row
 
 
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def call_window_is_open(campaign, now: Optional[datetime] = None) -> bool:
+    if str(getattr(campaign, "status", "") or "").lower() != "active":
+        return False
+    current = _aware_utc(now or datetime.now(timezone.utc))
+    start = _aware_utc(getattr(campaign, "start_at"))
+    end = _aware_utc(getattr(campaign, "end_at"))
+    return start <= current <= end
+
+
+def cooldown_is_satisfied(last_finished_at: Optional[datetime], now: Optional[datetime] = None) -> bool:
+    if last_finished_at is None:
+        return True
+    current = _aware_utc(now or datetime.now(timezone.utc))
+    finished = _aware_utc(last_finished_at)
+    return (current - finished).total_seconds() >= CALL_COOLDOWN_SECONDS
+
+
+def next_callable_contact(db: Session, campaign: JoodCallCampaign, now: Optional[datetime] = None) -> Optional[CompanyContact]:
+    if not call_window_is_open(campaign, now):
+        return None
+    if not cooldown_is_satisfied(campaign.last_finished_at, now):
+        return None
+    contacted_ids = select(JoodCallLog.contact_id).where(JoodCallLog.campaign_id == campaign.id)
+    return db.scalar(
+        select(CompanyContact)
+        .where(
+            CompanyContact.contact_type == campaign.contact_type,
+            CompanyContact.status == "active",
+            ~CompanyContact.id.in_(contacted_ids),
+        )
+        .order_by(CompanyContact.last_contact_at.asc().nullsfirst(), CompanyContact.id.asc())
+        .limit(1)
+    )
+
+
 def _admin_redirect(request: Request):
     try:
         core.require_admin(request)
     except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
     return None
+
+
+def _form_value(form: dict, key: str, default: str = "") -> str:
+    return str((form.get(key) or [default])[0]).strip()
+
+
+@core.app.post("/admin/company/jood/contacts")
+async def jood_contact_save(request: Request, db: Session = Depends(core.get_db)):
+    redirect = _admin_redirect(request)
+    if redirect:
+        return redirect
+    form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
+    phone = normalize_contact_phone(_form_value(form, "phone"))
+    contact_type = _form_value(form, "contact_type", "customer").lower()
+    if not phone or contact_type not in CONTACT_TYPES:
+        raise HTTPException(status_code=400, detail="Valid Saudi phone and contact type are required")
+
+    row = db.scalar(select(CompanyContact).where(CompanyContact.phone == phone))
+    if not row:
+        row = CompanyContact(phone=phone, contact_type=contact_type)
+        db.add(row)
+    row.contact_type = contact_type
+    row.display_name = _form_value(form, "display_name") or row.display_name
+    row.business_name = _form_value(form, "business_name") or row.business_name
+    row.city = _form_value(form, "city") or row.city
+    row.notes = _form_value(form, "notes") or row.notes
+    row.status = "active"
+    if contact_type == "merchant" and not row.merchant_stage:
+        row.merchant_stage = "new"
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return RedirectResponse("/admin/company/jood", status_code=303)
+
+
+@core.app.post("/admin/company/jood/contacts/{contact_id}/do-not-contact")
+def jood_contact_block(contact_id: int, request: Request, db: Session = Depends(core.get_db)):
+    redirect = _admin_redirect(request)
+    if redirect:
+        return redirect
+    row = db.get(CompanyContact, contact_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    row.status = "do_not_contact"
+    if row.contact_type == "merchant":
+        row.merchant_stage = "do_not_contact"
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return RedirectResponse("/admin/company/jood", status_code=303)
 
 
 @core.app.get("/admin/company/jood", response_class=HTMLResponse)
@@ -299,7 +475,22 @@ def jood_operations_page(request: Request, db: Session = Depends(core.get_db)):
             .limit(100)
         ).all()
     )
-    rows = "".join(
+    campaigns = list(
+        db.scalars(
+            select(JoodCallCampaign)
+            .order_by(JoodCallCampaign.created_at.desc(), JoodCallCampaign.id.desc())
+            .limit(20)
+        ).all()
+    )
+    call_logs = list(
+        db.scalars(
+            select(JoodCallLog)
+            .order_by(JoodCallLog.ended_at.desc(), JoodCallLog.id.desc())
+            .limit(30)
+        ).all()
+    )
+
+    contact_rows = "".join(
         "<tr>"
         f"<td>{core.esc(c.display_name or c.business_name or '—')}</td>"
         f"<td>{core.esc(c.contact_type)}</td>"
@@ -307,21 +498,67 @@ def jood_operations_page(request: Request, db: Session = Depends(core.get_db)):
         f"<td>{core.esc(c.city or '—')}</td>"
         f"<td>{core.esc(c.merchant_stage or '—')}</td>"
         f"<td>{core.esc(c.status)}</td>"
+        f"<td><a class='btn btn-blue' href='/admin/company/jood/contacts/{c.id}/call'>اتصال بواسطة جود</a></td>"
         "</tr>"
         for c in contacts
-    ) or "<tr><td colspan='6' class='muted'>لا توجد جهات اتصال بعد.</td></tr>"
+    ) or "<tr><td colspan='7' class='muted'>لا توجد جهات اتصال بعد.</td></tr>"
+
+    campaign_rows = "".join(
+        "<tr>"
+        f"<td>{core.esc(c.name)}</td><td>{core.esc(c.contact_type)}</td>"
+        f"<td>{core.esc(core.fmt_dt(c.start_at))}</td><td>{core.esc(core.fmt_dt(c.end_at))}</td>"
+        f"<td>{core.esc(c.status)}</td><td>30 ثانية</td>"
+        "</tr>"
+        for c in campaigns
+    ) or "<tr><td colspan='6' class='muted'>لا توجد حملات اتصال بعد.</td></tr>"
+
+    log_rows = "".join(
+        "<tr>"
+        f"<td>{core.esc(log.contact_name or '—')}</td><td>{core.esc(log.contact_type)}</td>"
+        f"<td>{core.esc(log.outcome)}</td><td>{log.duration_seconds} ث</td>"
+        f"<td>{core.esc((log.summary or '—')[:280])}</td><td>{core.esc(core.fmt_dt(log.ended_at))}</td>"
+        "</tr>"
+        for log in call_logs
+    ) or "<tr><td colspan='6' class='muted'>لا توجد مكالمات مسجلة بعد.</td></tr>"
 
     body = f"""
     <main class='wrap' style='padding:28px 0 48px'>
       <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
         <div><h1 style='margin-bottom:4px'>جود · العمليات والعملاء والتجار</h1>
-        <p class='muted'>Company AI هو مصدر نوع الجهة، وجود تستخدم نفس الذكاء في واتساب والمكالمات.</p></div>
+        <p class='muted'>Company AI يحدد Customer أو Merchant. جود تستخدم نفس العقل والذاكرة في واتساب والمكالمات.</p></div>
         <a class='btn btn-muted' href='/admin/company'>Control Center</a>
       </div>
+
+      <section class='card' style='padding:22px;margin-top:18px'>
+        <h2>إضافة Customer / Merchant</h2>
+        <form method='post' action='/admin/company/jood/contacts'>
+          <div class='grid grid-mobile-1' style='grid-template-columns:repeat(3,1fr)'>
+            <div><label>رقم الجوال</label><input class='input' name='phone' dir='ltr' required placeholder='05xxxxxxxx'></div>
+            <div><label>النوع</label><select class='select' name='contact_type'><option value='customer'>Customer</option><option value='merchant'>Merchant</option></select></div>
+            <div><label>الاسم</label><input class='input' name='display_name'></div>
+            <div><label>اسم النشاط</label><input class='input' name='business_name'></div>
+            <div><label>المدينة</label><input class='input' name='city' placeholder='الرياض'></div>
+            <div><label>ملاحظات / سياق</label><input class='input' name='notes'></div>
+          </div>
+          <button class='btn btn-blue' style='margin-top:14px' type='submit'>حفظ</button>
+        </form>
+      </section>
+
       <section class='card' style='padding:22px;margin-top:18px'>
         <h2>جهات الاتصال</h2>
-        <div class='table-wrap'><table><thead><tr><th>الاسم / النشاط</th><th>النوع</th><th>الهاتف</th><th>المدينة</th><th>مرحلة التاجر</th><th>الحالة</th></tr></thead>
-        <tbody>{rows}</tbody></table></div>
+        <div class='table-wrap'><table><thead><tr><th>الاسم / النشاط</th><th>النوع</th><th>الهاتف</th><th>المدينة</th><th>مرحلة التاجر</th><th>الحالة</th><th>إجراء</th></tr></thead>
+        <tbody>{contact_rows}</tbody></table></div>
+      </section>
+
+      <section class='card' style='padding:22px;margin-top:18px'>
+        <h2>حملات الاتصال</h2>
+        <p class='muted'>نافذة الاتصال من وقت إلى وقت، ومهلة ثابتة 30 ثانية بين المحاولات. الاتصال التلقائي مؤجل؛ v1 يبدأ يدويًا من Phone Link.</p>
+        <div class='table-wrap'><table><thead><tr><th>الحملة</th><th>النوع</th><th>من</th><th>إلى</th><th>الحالة</th><th>Cooldown</th></tr></thead><tbody>{campaign_rows}</tbody></table></div>
+      </section>
+
+      <section class='card' style='padding:22px;margin-top:18px'>
+        <h2>Call Log</h2>
+        <div class='table-wrap'><table><thead><tr><th>الجهة</th><th>النوع</th><th>النتيجة</th><th>المدة</th><th>الملخص</th><th>الوقت</th></tr></thead><tbody>{log_rows}</tbody></table></div>
       </section>
     </main>
     """
