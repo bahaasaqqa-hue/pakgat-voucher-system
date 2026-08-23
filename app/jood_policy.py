@@ -65,7 +65,11 @@ def sanitize_jood_reply(
     safe = safe.replace(LEGACY_CAR_CARE_PATH, CAR_CARE_URL)
     safe = _URL_RE.sub(_replace_unapproved_url, safe)
 
-    if _is_car_care_request(customer_text) and CAR_CARE_URL not in safe:
+    # Car-care replies must carry the canonical URL even if the model omitted it.
+    # `customer_text` is preferred; falling back to the generated reply keeps the
+    # safety behavior active for older call sites while they migrate.
+    car_care_context = customer_text or safe
+    if _is_car_care_request(car_care_context) and CAR_CARE_URL not in safe:
         safe = f"{safe}\n{CAR_CARE_URL}".strip()
 
     if not allow_handoff_claim:
