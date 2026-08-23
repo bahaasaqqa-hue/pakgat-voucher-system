@@ -275,8 +275,8 @@ def trusted_context_for(text: str, mode: str) -> str:
         facts.append("Use that exact approved URL for car-care; do not construct another category URL.")
     if _is_voucher_request(value):
         facts.append(
-            "Verified voucher flow: the customer buys digitally; the voucher/link and QR are issued; "
-            "the merchant scans/verifies and confirms redemption. Do not claim email delivery unless verified."
+            "آلية القسيمة الموثقة: يشتري العميل القسيمة رقميًا، ثم تصدر القسيمة/الرابط ورمز QR للعميل، "
+            "ويعرضها على التاجر الذي يتحقق منها ويؤكد الاستخدام. لا تذكري وسيلة إرسال غير موثقة."
         )
     if (mode or "").strip().lower() == "merchant":
         facts.append(
