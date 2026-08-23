@@ -7,7 +7,8 @@ from app.jood_ai import (
     extract_vertex_text,
     generate_jood_reply,
 )
-from app.jood_identity import should_jood_ai_reply
+from app.jood_identity import JOOD_SYSTEM_PROMPT, should_jood_ai_reply
+from app.whatsloop_inbound_core import normalize_inbound_event
 
 
 class FakeResponse:
@@ -35,14 +36,53 @@ class SequenceOpener:
 
 
 class JoodAITests(unittest.TestCase):
-    def test_reply_scope_direct_and_group(self):
+    def test_reply_scope_is_private_chat_only(self):
         self.assertTrue(should_jood_ai_reply("السلام عليكم", "966500000000@s.whatsapp.net"))
-        self.assertTrue(should_jood_ai_reply("يا جود عندي سؤال", "120363000000@g.us"))
-        self.assertTrue(should_jood_ai_reply("Jood can you help?", "120363000000@g.us"))
-        self.assertTrue(should_jood_ai_reply("عندي سؤال", "120363000000@g.us"))
-        self.assertTrue(should_jood_ai_reply("مين انتم", "120363000000@g.us"))
-        self.assertTrue(should_jood_ai_reply("مرحبا", "120363000000@g.us"))
+        self.assertFalse(should_jood_ai_reply("يا جود عندي سؤال", "120363000000@g.us"))
         self.assertFalse(should_jood_ai_reply("", "966500000000@s.whatsapp.net"))
+        self.assertFalse(should_jood_ai_reply("مرحبا", None))
+
+    def test_direct_whatsloop_message_uses_sender_when_chat_id_is_missing(self):
+        payload = {
+            "event": "message.received",
+            "data": {
+                "object": {
+                    "id": "msg-direct-1",
+                    "phone": "966500000000@s.whatsapp.net",
+                    "content": "مرحبا جود",
+                    "from_me": False,
+                },
+                "channel_id": 7,
+            },
+        }
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        event = normalize_inbound_event(payload, raw)
+        self.assertEqual(event.sender, "966500000000@s.whatsapp.net")
+        self.assertEqual(event.chat_id, event.sender)
+        self.assertTrue(should_jood_ai_reply(event.text, event.chat_id))
+
+    def test_group_whatsloop_message_is_never_routed_to_jood(self):
+        payload = {
+            "event": "message.received",
+            "data": {
+                "object": {
+                    "id": "msg-group-1",
+                    "phone": "966500000000@s.whatsapp.net",
+                    "group_id": "120363000000@g.us",
+                    "content": "يا جود عندي سؤال",
+                    "from_me": False,
+                },
+                "channel_id": 7,
+            },
+        }
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        event = normalize_inbound_event(payload, raw)
+        self.assertEqual(event.chat_id, "120363000000@g.us")
+        self.assertFalse(should_jood_ai_reply(event.text, event.chat_id))
+
+    def test_out_of_scope_instruction_is_short_and_does_not_answer_topic(self):
+        self.assertIn("لا تجيبي عن موضوعه", JOOD_SYSTEM_PROMPT)
+        self.assertIn("بجملة واحدة قصيرة", JOOD_SYSTEM_PROMPT)
 
     def test_vertex_payload_contains_only_real_history_and_current_message(self):
         history = [
