@@ -21,7 +21,12 @@ from app.jood_company_ops import (
     load_recent_turns,
     trusted_context_for,
 )
-from app.jood_outbound import _send_whatsloop_text, outbound_instruction_context, outbound_intent_for
+from app.jood_outbound import (
+    _send_whatsloop_text,
+    ensure_outbound_opening,
+    outbound_instruction_context,
+    outbound_intent_for,
+)
 from app.jood_policy import sanitize_jood_reply
 from app.jood_whatsapp_import import ImportedContact, parse_contact_upload
 from app.jood_whatsapp_settings import resolved_outreach_instruction
@@ -223,7 +228,7 @@ async def _deliver_campaign_dispatch(
             outbound_intent_for(mode),
             trusted,
         )
-        message = sanitize_jood_reply(generated)
+        message = ensure_outbound_opening(sanitize_jood_reply(generated), mode, contact)
         ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
         if not ok:
             raise RuntimeError(provider)

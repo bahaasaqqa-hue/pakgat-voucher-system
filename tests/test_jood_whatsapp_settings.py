@@ -14,6 +14,8 @@ class JoodWhatsAppSettingsTests(unittest.TestCase):
         self.assertEqual(default_prompt_for_type("customer"), CUSTOMER_DEFAULT_OUTREACH_PROMPT)
         self.assertEqual(default_prompt_for_type("merchant"), MERCHANT_DEFAULT_OUTREACH_PROMPT)
         self.assertNotEqual(CUSTOMER_DEFAULT_OUTREACH_PROMPT, MERCHANT_DEFAULT_OUTREACH_PROMPT)
+        self.assertIn("تواصل صادرة", CUSTOMER_DEFAULT_OUTREACH_PROMPT)
+        self.assertIn("لا تسألي", CUSTOMER_DEFAULT_OUTREACH_PROMPT)
 
     def test_blank_override_uses_stored_default(self):
         self.assertEqual(compose_outreach_instruction("merchant", "توجيه التاجر", ""), "توجيه التاجر")

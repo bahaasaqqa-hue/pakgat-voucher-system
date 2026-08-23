@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from app.jood_outbound import (
     build_contact_outreach_context,
+    ensure_outbound_opening,
     outbound_intent_for,
     outbound_instruction_context,
 )
@@ -35,6 +36,22 @@ class JoodOutboundTests(unittest.TestCase):
         self.assertIn("مركز سارة", context)
         self.assertIn("الرياض", context)
         self.assertNotIn("Company AI mode", context)
+
+    def test_generic_customer_service_reply_is_replaced_with_outbound_opening(self):
+        contact = SimpleNamespace(display_name="بهاء", business_name=None)
+        result = ensure_outbound_opening(
+            "أهلاً بك أستاذ بهاء، أنا جود من منصة باكيجات. كيف أساعدك اليوم؟",
+            "customer",
+            contact,
+        )
+        self.assertIn("أتواصل معك", result)
+        self.assertIn("عروض", result)
+        self.assertNotIn("كيف أساعدك", result)
+
+    def test_clear_outbound_opening_is_preserved(self):
+        contact = SimpleNamespace(display_name="سارة", business_name="مركز سارة")
+        message = "السلام عليكم أستاذة سارة، معك جود من باكيجات. أتواصل معك لعرض فرصة تعاون مناسبة لمركز سارة، هل يناسبك أرسل التفاصيل؟"
+        self.assertEqual(ensure_outbound_opening(message, "merchant", contact), message)
 
 
 if __name__ == "__main__":

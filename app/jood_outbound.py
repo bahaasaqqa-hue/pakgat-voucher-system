@@ -56,6 +56,34 @@ def build_contact_outreach_context(contact, instruction: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def ensure_outbound_opening(message: str, mode: str, contact) -> str:
+    """Prevent a first-touch outreach from degrading into an inbound help greeting."""
+    clean = " ".join(str(message or "").strip().split())
+    lowered = clean.lower()
+    outbound_markers = ("أتواصل مع", "نتواصل مع", "تواصلنا مع", "فرصة تعاون", "عرض خاص")
+    inbound_markers = ("كيف أساعدك", "كيف اقدر اساعدك", "كيف أقدر أساعدك", "وش أقدر أخدمك")
+    if (
+        len(clean) >= 60
+        and any(marker in clean for marker in outbound_markers)
+        and not any(marker in lowered for marker in inbound_markers)
+    ):
+        return clean
+
+    name = str(getattr(contact, "display_name", "") or "").strip()
+    business = str(getattr(contact, "business_name", "") or "").strip()
+    greeting = f"أهلًا {name}، " if name else "أهلًا، "
+    if str(mode or "").strip().lower() == "merchant":
+        target = f" لنشاط {business}" if business else ""
+        return (
+            f"{greeting}معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون{target} "
+            "تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة. هل يناسبك أرسل لك التفاصيل؟"
+        )
+    return (
+        f"{greeting}معك جود من منصة باكيجات. أتواصل معك لتعريفك بعروض وبكجات مختارة "
+        "يمكنك الاستفادة منها بسهولة. هل يناسبك أرسل لك التفاصيل؟"
+    )
+
+
 def _admin_redirect(request: Request):
     try:
         core.require_admin(request)
@@ -159,6 +187,7 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
     message = sanitize_jood_reply(generated, customer_text=goal)
+    message = ensure_outbound_opening(message, mode, contact)
     ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
     core.log_event(
         db,
