@@ -25,6 +25,7 @@ def build_local_self_test_overlay(session_id: int) -> str:
   originalButton.replaceWith(testVoiceBtn);
 
   const statusEl = document.getElementById('voice-status');
+  const startBtn = document.getElementById('start-jood');
   const diagnosticsHost = document.createElement('div');
   diagnosticsHost.id = 'local-self-test-diagnostics';
   diagnosticsHost.className = 'card';
@@ -74,22 +75,29 @@ def build_local_self_test_overlay(session_id: int) -> str:
     if (statusEl) statusEl.textContent = text;
   }
 
-  function isVoicemeeterOutput(device) {
+  function isDisallowedLocalOutput(device) {
     const label = String((device && device.label) || '').toLowerCase();
-    return label.includes('voicemeeter') || label.includes('vb-audio') || label.includes('virtual cable');
+    return label.includes('voicemeeter')
+      || label.includes('vb-audio')
+      || label.includes('virtual cable')
+      || label.includes('motorola')
+      || label.includes('hands-free')
+      || label.includes('hands free');
   }
 
   function physicalOutputScore(device) {
-    if (!device || device.kind !== 'audiooutput' || isVoicemeeterOutput(device)) return -1;
+    if (!device || device.kind !== 'audiooutput' || isDisallowedLocalOutput(device)) return -1;
     const label = String(device.label || '').toLowerCase();
     if (!label) return -1;
-    let score = 0;
-    if (device.deviceId && device.deviceId !== 'default') score += 20;
-    if (label.includes('realtek')) score += 100;
-    if (label.includes('lg ultrafine')) score += 90;
-    if (label.includes('speakers') || label.includes('speaker')) score += 70;
-    if (label.includes('headphones') || label.includes('headphone')) score += 60;
-    if (label.includes('headset')) score += 40;
+
+    let score = -1;
+    if (label.includes('realtek')) score = 120;
+    else if (label.includes('lg ultrafine')) score = 110;
+    else if (label.includes('speakers') || label.includes('speaker')) score = 90;
+    else if (label.includes('headphones') || label.includes('headphone')) score = 80;
+    else if (label.includes('headset')) score = 70;
+
+    if (score > 0 && device.deviceId && device.deviceId !== 'default') score += 10;
     return score;
   }
 
@@ -110,7 +118,9 @@ def build_local_self_test_overlay(session_id: int) -> str:
       setMainStatus('اختر سماعة اللابتوب الفعلية مثل Speakers (Realtek/LG)، وليس Voicemeeter.');
       const selected = await navigator.mediaDevices.selectAudioOutput();
       if (!selected || selected.kind !== 'audiooutput') throw new Error('لم يتم اختيار مخرج صوت.');
-      if (isVoicemeeterOutput(selected)) throw new Error('تم اختيار Voicemeeter. أعد الاختبار واختر Speakers (Realtek/LG).');
+      if (isDisallowedLocalOutput(selected)) {
+        throw new Error('اختر مخرجًا محليًا مثل Speakers (Realtek/LG)، وليس Voicemeeter أو Motorola Hands-Free.');
+      }
       return selected;
     }
 
@@ -138,8 +148,8 @@ def build_local_self_test_overlay(session_id: int) -> str:
     });
   }
 
-  function playUntilEnded(audio) {
-    return new Promise(async (resolve, reject) => {
+  function waitForPlaybackEnd(audio) {
+    return new Promise((resolve, reject) => {
       let settled = false;
       const timeout = setTimeout(() => {
         if (settled) return;
@@ -158,20 +168,19 @@ def build_local_self_test_overlay(session_id: int) -> str:
         resolve();
       }), {once: true});
       audio.addEventListener('error', finish(() => reject(new Error('فشل Playback بعد بدء الاختبار.'))), {once: true});
-      try {
-        await audio.play();
-      } catch (err) {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timeout);
-          reject(err);
-        }
-      }
+
+      Promise.resolve(audio.play()).catch(err => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
   }
 
   testVoiceBtn.addEventListener('click', async () => {
-    if (window.started === true) {
+    const callBridgeRunning = !!(startBtn && startBtn.disabled && String(startBtn.textContent || '').includes('جود تعمل'));
+    if (callBridgeRunning) {
       setMainStatus('أوقف جود أولًا قبل اختبار الصوت المحلي.');
       return;
     }
@@ -219,7 +228,7 @@ def build_local_self_test_overlay(session_id: int) -> str:
       updateDiagnostic('Audio Decode', 'ready');
 
       updateDiagnostic('Playback State', 'starting');
-      await playUntilEnded(audio);
+      await waitForPlaybackEnd(audio);
       setMainStatus('اختبار صوت جود المحلي انتهى على: ' + sinkLabel);
     } catch (err) {
       updateDiagnostic('Playback State', 'failed: ' + err.message);
