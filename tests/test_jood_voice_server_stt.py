@@ -24,10 +24,11 @@ class JoodVoiceServerSTTTests(unittest.TestCase):
         self.assertEqual(stt.normalize_transcript("<NO_SPEECH>"), "")
         self.assertEqual(stt.normalize_transcript("  مرحبا بك  "), "مرحبا بك")
 
-    def test_stt_route_is_registered(self):
+    def test_stt_and_health_routes_are_registered(self):
         stt = self._module()
         paths = {getattr(route, "path", "") for route in stt.core.app.routes}
         self.assertIn("/admin/company/jood/voice/{session_id}/stt", paths)
+        self.assertIn("/admin/company/jood/voice/{session_id}/stt/health", paths)
 
 
 if __name__ == "__main__":
