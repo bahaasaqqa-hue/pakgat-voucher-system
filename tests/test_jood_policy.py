@@ -30,6 +30,18 @@ class JoodPolicyTests(unittest.TestCase):
         self.assertEqual(approved_url_for_intent("car_care"), CAR_CARE_URL)
         self.assertIsNone(approved_url_for_intent("unknown"))
 
+    def test_car_care_question_forces_canonical_url_into_reply(self):
+        reply = sanitize_jood_reply(
+            "أكيد، عندنا قسم للعناية بالسيارات.",
+            customer_text="ابغى عروض العناية بالسيارات",
+        )
+        self.assertIn(CAR_CARE_URL, reply)
+        self.assertNotIn("/ar/categories/car-care", reply)
+
+    def test_non_car_care_question_does_not_append_car_care_url(self):
+        reply = sanitize_jood_reply("حياك الله.", customer_text="مرحبا")
+        self.assertNotIn(CAR_CARE_URL, reply)
+
     def test_completed_handoff_claim_is_softened_without_real_handoff(self):
         text = "تم رفع بياناتكم لفريق الشراكات وسيتواصل معكم الفريق."
         safe = sanitize_jood_reply(text, allow_handoff_claim=False)
