@@ -23,6 +23,16 @@ class JoodCatalogTests(unittest.TestCase):
         self.assertIn("https://pakgat.com/ar/p/11", result.reply)
         self.assertEqual(result.presented_options[0]["id"], "11")
 
+    def test_executor_keeps_one_canonical_product_url_at_message_end(self):
+        decision = {
+            "action": "send_product_link",
+            "selected_option": "هدايا",
+            "reply": "هذا العرض مناسب لك https://pakgat.com/ar/p/11 وتقدر تستخدم كود VIP",
+        }
+        result = execute_catalog_action(decision, self.items)
+        self.assertEqual(result.reply.count("https://pakgat.com/ar/p/11"), 1)
+        self.assertTrue(result.reply.endswith("https://pakgat.com/ar/p/11"))
+
     def test_selecting_second_option_uses_saved_option_not_literal_guessing(self):
         decision = {"action": "send_selected_option", "selected_option": "2", "reply": "اختيار ممتاز."}
         previous = [{"id": "11", "name": "هدية", "url": "https://pakgat.com/ar/p/11"}, {"id": "22", "name": "سيارات", "url": "https://pakgat.com/ar/p/22"}]

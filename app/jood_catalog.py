@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import NamedTuple
 from urllib.parse import quote
 
@@ -139,6 +140,11 @@ def execute_catalog_action(
 
     options = [{"id": item.id, "name": item.name, "url": item.url} for item in chosen]
     if chosen:
+        # The backend owns product URLs. Remove model-rendered copies first so
+        # the canonical raw link appears exactly once, at the message end.
+        for item in chosen:
+            reply = re.sub(re.escape(item.url), "", reply, flags=re.IGNORECASE)
+        reply = " ".join(reply.split()).strip()
         details = []
         for item in chosen:
             price = f" — {item.price:g} ر.س" if item.price else ""
