@@ -202,6 +202,13 @@ def conversation_key_for(
     return f"{clean_channel}:{contact_id}"
 
 
+def _is_voucher_request(value: str) -> bool:
+    return any(
+        word in value
+        for word in ("قسيم", "قسائ", "كوبون", "voucher", "qr", "رقم الطلب", "طلب")
+    )
+
+
 def route_jood_intent(text: str, mode: str) -> str:
     value = " ".join(str(text or "").strip().lower().split())
     mode = (mode or "customer").strip().lower()
@@ -232,8 +239,7 @@ def route_jood_intent(text: str, mode: str) -> str:
     payment_words = ("دفع", "استرجاع", "استرداد", "refund", "payment", "خصم المبلغ")
     if any(word in value for word in payment_words):
         return "refund_or_payment"
-    voucher_words = ("قسيم", "كوبون", "voucher", "qr", "رقم الطلب", "طلب")
-    if any(word in value for word in voucher_words):
+    if _is_voucher_request(value):
         return "order_or_voucher"
     complaint_words = ("شكوى", "مشكلة", "ما يفتح", "مايفتح", "خربان", "complaint")
     if any(word in value for word in complaint_words):
@@ -267,7 +273,7 @@ def trusted_context_for(text: str, mode: str) -> str:
     if "سيار" in value or "car care" in value:
         facts.append(f"Approved car-care category URL: {CAR_CARE_URL}")
         facts.append("Use that exact approved URL for car-care; do not construct another category URL.")
-    if any(word in value for word in ("قسيم", "كوبون", "voucher", "qr")):
+    if _is_voucher_request(value):
         facts.append(
             "Verified voucher flow: the customer buys digitally; the voucher/link and QR are issued; "
             "the merchant scans/verifies and confirms redemption. Do not claim email delivery unless verified."
