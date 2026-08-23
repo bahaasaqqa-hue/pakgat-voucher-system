@@ -3,15 +3,13 @@ import json
 import unittest
 from unittest.mock import patch
 
+from app import jood_voice_bridge_ui as bridge_ui
 from app.jood_company_ops import CompanyContact, JoodCallSession
 from app.jood_voice_live_bridge import (
     build_live_voice_bridge_script,
     initial_voice_opening,
     start_voice_conversation,
 )
-from app.jood_voice_local_self_test import build_local_self_test_overlay
-
-# Regression coverage for audible startup and standalone TTS self-test.
 
 
 class _FakeVoiceDB:
@@ -66,27 +64,27 @@ class JoodVoiceBridgeUITests(unittest.TestCase):
         self.assertIn("startBtn.textContent = 'إعادة تشغيل جود'", script)
         self.assertNotIn("Microsoft Edge", script)
 
-    def test_local_self_test_uses_physical_output_sink_not_call_audio_context(self):
-        overlay = build_local_self_test_overlay(7)
-        self.assertIn("test-jood-voice", overlay)
-        self.assertIn("اختبار صوت جود", overlay)
-        self.assertIn("السلام عليكم، معك جود من بكجات.", overlay)
-        self.assertIn("/admin/company/jood/voice/7/tts", overlay)
-        self.assertIn("navigator.mediaDevices.enumerateDevices", overlay)
-        self.assertIn("audiooutput", overlay)
-        self.assertIn("setSinkId", overlay)
-        self.assertIn("new Audio", overlay)
-        self.assertIn("voicemeeter", overlay.lower())
-        self.assertIn("realtek", overlay.lower())
-        self.assertIn("TTS HTTP", overlay)
-        self.assertIn("Audio Bytes", overlay)
-        self.assertIn("Selected Sink", overlay)
-        self.assertIn("Audio Decode", overlay)
-        self.assertIn("Playback State", overlay)
-        self.assertIn("ended", overlay.lower())
-        self.assertNotIn("await speakReply", overlay)
-        self.assertNotIn("runDiagnostics", overlay)
-        self.assertNotIn("startCall", overlay)
+    def test_bridge_page_contains_direct_self_test_link_and_live_controls(self):
+        session = JoodCallSession(id=9, contact_id=3, status="active", transcript="")
+        contact = CompanyContact(id=3, phone="966500000000", contact_type="customer", status="active")
+        db = _FakeVoiceDB(session, contact)
+
+        with patch("app.jood_voice_bridge_ui._admin_redirect", return_value=None), patch(
+            "app.jood_voice_bridge_ui.core.page_shell",
+            side_effect=lambda title, body, admin=False: body,
+        ):
+            response = bridge_ui.voice_bridge_page(9, object(), db)
+
+        html = bytes(response.body).decode("utf-8")
+        self.assertIn("/admin/company/jood/voice/9/self-test", html)
+        self.assertIn("target='_blank'", html)
+        self.assertIn("اختبار صوت جود (صفحة مستقلة)", html)
+        self.assertIn("id='start-jood'", html)
+        self.assertIn("id='stop-listening'", html)
+        self.assertIn("id='diagnostic-b1'", html)
+        self.assertIn("id='diagnostic-stt'", html)
+        self.assertIn("id='diagnostic-tts'", html)
+        self.assertNotIn("ابدأ استماع جود", html)
 
     def test_existing_session_start_returns_opening_without_mutating_transcript(self):
         original_transcript = "CUSTOMER: سابق"
