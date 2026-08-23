@@ -10,6 +10,8 @@ from app.jood_voice_live_bridge import (
     start_voice_conversation,
 )
 
+# Regression coverage for audible startup and standalone TTS self-test.
+
 
 class _FakeVoiceDB:
     def __init__(self, session, contact):
