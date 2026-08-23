@@ -23,12 +23,13 @@ sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
   "$APP_DIR"/app/whatsloop_inbound*.py \
   "$APP_DIR/app/whatsloop_security.py"
 
-# Focused Jood AI behavior gate uses only Python stdlib/unittest, so deployment
-# stops before restart if routing, payload, token-flow, or response parsing regresses.
+# Jood deployment gate: run every focused Jood regression test before restart.
+# This covers memory, Company AI routing, URL policy, outbound WhatsApp,
+# call-window/cooldown behavior, voice-session helpers and bridge behavior.
 (
   cd "$APP_DIR"
   sudo -u pakgat env PYTHONPATH=. "$APP_DIR/.venv/bin/python" \
-    -m unittest discover -s tests -p 'test_jood_ai.py' -q
+    -m unittest discover -s tests -p 'test_jood_*.py' -q
 )
 
 install -m 0644 "$APP_DIR/deploy/gce/pakgat-ai-monitor.service" /etc/systemd/system/pakgat-ai-monitor.service
@@ -58,6 +59,7 @@ systemctl --no-pager --full status pakgat-db-backup.timer | sed -n '1,10p'
 echo
 printf '%s\n' 'Pakgat AI Company + Corporate Benefits GCE installation completed.'
 printf '%s\n' 'Dashboard: https://voucher.pakgat.com/admin/company'
+printf '%s\n' 'Jood Control: https://voucher.pakgat.com/admin/company/jood/control'
 printf '%s\n' 'Corporate Admin: https://voucher.pakgat.com/admin/company/corporate'
 printf '%s\n' 'Corporate Public: https://voucher.pakgat.com/corporate (staging path until benefits.pakgat.com DNS/TLS is enabled)'
 printf '%s\n' 'Health: https://voucher.pakgat.com/company/health'
