@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app import application as core
@@ -580,6 +580,16 @@ setStatus('جاهز. يمكنك اختبار صوت جود بدون مكالمة
     return template
 
 
+@core.app.get("/admin/company/jood/voice/{session_id}/runtime.js")
+def jood_voice_runtime_script(session_id: int, request: Request):
+    _require_admin_api(request)
+    return Response(
+        content=build_live_voice_bridge_script(session_id),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _live_voice_bridge_page(session_id: int, request: Request, db: Session = Depends(core.get_db)):
     response = base.voice_bridge_page(session_id, request, db)
     if not isinstance(response, HTMLResponse):
@@ -588,7 +598,8 @@ def _live_voice_bridge_page(session_id: int, request: Request, db: Session = Dep
     html = bytes(response.body).decode("utf-8", errors="replace")
     old_script = base.build_voice_bridge_script(session_id)
     old_tag = f"<script>{old_script}</script>"
-    new_tag = f"<script>{build_live_voice_bridge_script(session_id)}</script>"
+    runtime_url = f"/admin/company/jood/voice/{int(session_id)}/runtime.js"
+    new_tag = f"<script src='{runtime_url}' defer></script>"
     if old_tag not in html:
         raise RuntimeError("Jood base voice script was not found in bridge page")
     html = html.replace(old_tag, new_tag, 1)
