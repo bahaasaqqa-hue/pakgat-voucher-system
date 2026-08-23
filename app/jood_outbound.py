@@ -23,6 +23,8 @@ from app.jood_company_ops import (
     trusted_context_for,
 )
 from app.jood_policy import sanitize_jood_reply
+from app.jood_catalog import catalog_context, choose_featured_product, load_live_catalog
+from app.jood_sales_playbook import featured_product_context, sales_opening_fallback
 from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
 
@@ -57,7 +59,7 @@ def build_contact_outreach_context(contact, instruction: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def ensure_outbound_opening(message: str, mode: str, contact) -> str:
+def ensure_outbound_opening(message: str, mode: str, contact, featured_product=None) -> str:
     """Prevent a first-touch outreach from degrading into an inbound help greeting."""
     clean = " ".join(str(message or "").strip().split())
     lowered = clean.lower()
@@ -67,6 +69,11 @@ def ensure_outbound_opening(message: str, mode: str, contact) -> str:
         len(clean) >= 60
         and any(marker in clean for marker in outbound_markers)
         and not any(marker in lowered for marker in inbound_markers)
+        and (
+            str(mode or "").strip().lower() == "merchant"
+            or featured_product is None
+            or featured_product.name in clean
+        )
     ):
         return clean
 
@@ -79,10 +86,7 @@ def ensure_outbound_opening(message: str, mode: str, contact) -> str:
             f"{greeting}معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون{target} "
             "تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة. هل يناسبك أرسل لك التفاصيل؟"
         )
-    return (
-        f"{greeting}معك جود من منصة باكيجات. أتواصل معك لتعريفك بعروض وبكجات مختارة "
-        "يمكنك الاستفادة منها بسهولة. هل يناسبك أرسل لك التفاصيل؟"
-    )
+    return sales_opening_fallback(contact, featured_product)
 
 
 def _admin_redirect(request: Request):
@@ -173,6 +177,11 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
     history = load_recent_turns(db, contact.id, limit=8)
     trusted = trusted_context_for(goal, mode) + "\n" + outbound_instruction_context(mode, goal)
     trusted += "\n" + build_contact_outreach_context(contact, goal)
+    catalog = load_live_catalog(db) if mode == "customer" else []
+    featured = choose_featured_product(catalog, override or goal)
+    if mode == "customer":
+        trusted += "\n" + featured_product_context(featured)
+        trusted += "\n" + catalog_context(catalog)
 
     try:
         generated = await asyncio.to_thread(
@@ -187,8 +196,9 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         core.log_event(db, "jood_outbound_ai_failed", details=f"contact={contact.id}; error={str(exc)[:160]}")
         raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
-    message = sanitize_jood_reply(generated, customer_text=goal)
-    message = ensure_outbound_opening(message, mode, contact)
+    approved_urls = {item.url for item in catalog}
+    message = sanitize_jood_reply(generated, customer_text=goal, approved_urls=approved_urls)
+    message = ensure_outbound_opening(message, mode, contact, featured)
     ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
     core.log_event(
         db,
@@ -206,7 +216,10 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    remember_outreach_context(db, contact.id, mode, goal, "individual", message)
+    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    remember_outreach_context(
+        db, contact.id, mode, goal, "individual", message, presented_options=presented
+    )
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
         db.commit()

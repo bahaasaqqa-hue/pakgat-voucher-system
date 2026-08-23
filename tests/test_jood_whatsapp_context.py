@@ -46,7 +46,15 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         self.assertEqual(inbound_outreach_context(self.db, 999), "")
 
     def test_state_tracks_persona_stage_commitment_and_collected_info(self):
-        row = remember_outreach_context(self.db, 7, "customer", "تعريف العميل بالعروض", "individual")
+        options = [{"id": "11", "name": "عرض أول", "url": "https://pakgat.com/ar/p/11"}]
+        row = remember_outreach_context(
+            self.db,
+            7,
+            "customer",
+            "تعريف العميل بالعروض",
+            "individual",
+            presented_options=options,
+        )
         self.assertEqual(row.state_json["direction"], "outbound")
         self.assertEqual(row.state_json["persona"], "outbound_customer_sales")
         update_outreach_state(
@@ -55,10 +63,14 @@ class JoodWhatsAppContextTests(unittest.TestCase):
             next_stage="details_shared",
             last_commitment="سؤال العميل عن الفئة المفضلة",
             collected_info={"interest": "car_care"},
+            presented_options=options,
+            selected_product_id="11",
             status="active",
         )
         self.assertEqual(row.state_json["current_stage"], "details_shared")
         self.assertEqual(row.state_json["collected_info"]["interest"], "car_care")
+        self.assertEqual(row.state_json["presented_options"], options)
+        self.assertEqual(row.state_json["selected_product_id"], "11")
 
 
 if __name__ == "__main__":

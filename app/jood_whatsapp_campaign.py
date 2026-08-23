@@ -31,6 +31,8 @@ from app.jood_policy import sanitize_jood_reply
 from app.jood_whatsapp_import import ImportedContact, parse_contact_upload
 from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
+from app.jood_catalog import catalog_context, choose_featured_product, load_live_catalog
+from app.jood_sales_playbook import featured_product_context
 
 
 class JoodWhatsAppCampaign(core.Base):
@@ -220,6 +222,11 @@ async def _deliver_campaign_dispatch(
         trusted += f"\nKnown city: {contact.city}"
     if contact.notes:
         trusted += f"\nApproved Company AI notes: {contact.notes[:1200]}"
+    catalog = load_live_catalog(db) if mode == "customer" else []
+    featured = choose_featured_product(catalog, instruction)
+    if mode == "customer":
+        trusted += "\n" + featured_product_context(featured)
+        trusted += "\n" + catalog_context(catalog)
     try:
         generated = await asyncio.to_thread(
             generate_jood_reply,
@@ -229,7 +236,10 @@ async def _deliver_campaign_dispatch(
             outbound_intent_for(mode),
             trusted,
         )
-        message = ensure_outbound_opening(sanitize_jood_reply(generated), mode, contact)
+        approved_urls = {item.url for item in catalog}
+        message = ensure_outbound_opening(
+            sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
+        )
         ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
         if not ok:
             raise RuntimeError(provider)
@@ -256,7 +266,10 @@ async def _deliver_campaign_dispatch(
         message,
         conversation_key_for("whatsapp", contact.id),
     )
-    remember_outreach_context(db, contact.id, mode, instruction, "campaign", message)
+    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    remember_outreach_context(
+        db, contact.id, mode, instruction, "campaign", message, presented_options=presented
+    )
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
     db.commit()
@@ -432,6 +445,11 @@ async def send_next_whatsapp_campaign_contact(
         trusted += f"\nKnown city: {contact.city}"
     if contact.notes:
         trusted += f"\nApproved Company AI notes: {contact.notes[:1200]}"
+    catalog = load_live_catalog(db) if mode == "customer" else []
+    featured = choose_featured_product(catalog, campaign.goal)
+    if mode == "customer":
+        trusted += "\n" + featured_product_context(featured)
+        trusted += "\n" + catalog_context(catalog)
 
     try:
         generated = await asyncio.to_thread(
@@ -450,7 +468,10 @@ async def send_next_whatsapp_campaign_contact(
         )
         raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
-    message = sanitize_jood_reply(generated)
+    approved_urls = {item.url for item in catalog}
+    message = ensure_outbound_opening(
+        sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
+    )
     ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
     if not ok:
         core.log_event(
@@ -475,6 +496,10 @@ async def send_next_whatsapp_campaign_contact(
         "assistant",
         message,
         conversation_key_for("whatsapp", contact.id),
+    )
+    presented = ([{"id": featured.id, "name": featured.name, "url": featured.url}] if featured else [])
+    remember_outreach_context(
+        db, contact.id, mode, campaign.goal, "campaign", message, presented_options=presented
     )
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"

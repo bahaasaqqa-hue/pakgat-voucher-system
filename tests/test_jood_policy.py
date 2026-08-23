@@ -26,6 +26,13 @@ class JoodPolicyTests(unittest.TestCase):
         self.assertEqual(sanitize_jood_reply(CAR_CARE_URL), CAR_CARE_URL)
         self.assertEqual(sanitize_jood_reply(PAKGAT_HOME_URL), PAKGAT_HOME_URL)
 
+    def test_live_salla_product_url_survives_when_explicitly_approved(self):
+        product_url = "https://pakgat.com/ar/p/real-product"
+        self.assertEqual(
+            sanitize_jood_reply(product_url, approved_urls={product_url}),
+            product_url,
+        )
+
     def test_car_care_intent_returns_only_canonical_url(self):
         self.assertEqual(approved_url_for_intent("car_care"), CAR_CARE_URL)
         self.assertIsNone(approved_url_for_intent("unknown"))

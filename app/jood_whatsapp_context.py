@@ -47,6 +47,7 @@ def remember_outreach_context(
     objective: str,
     source: str,
     last_commitment: str = "",
+    presented_options: list[dict[str, str]] | None = None,
 ) -> JoodWhatsAppContext:
     row = db.scalar(select(JoodWhatsAppContext).where(JoodWhatsAppContext.contact_id == contact_id))
     if not row:
@@ -64,6 +65,8 @@ def remember_outreach_context(
         "current_stage": "opening_sent",
         "last_commitment": infer_last_commitment(last_commitment),
         "collected_info": {},
+        "presented_options": list(presented_options or []),
+        "selected_product_id": "",
         "status": "active",
     }
     row.updated_at = datetime.now(timezone.utc)
@@ -79,6 +82,8 @@ def update_outreach_state(
     next_stage: str,
     last_commitment: str,
     collected_info: dict | None = None,
+    presented_options: list[dict[str, str]] | None = None,
+    selected_product_id: str = "",
     status: str = "active",
 ) -> JoodWhatsAppContext | None:
     row = active_outreach_context(db, contact_id)
@@ -90,6 +95,10 @@ def update_outreach_state(
     merged_info = dict(state.get("collected_info") or {})
     merged_info.update(dict(collected_info or {}))
     state["collected_info"] = merged_info
+    if presented_options is not None:
+        state["presented_options"] = list(presented_options)
+    if selected_product_id:
+        state["selected_product_id"] = str(selected_product_id)[:100]
     state["status"] = str(status or "active")[:40]
     row.state_json = state
     row.active = state["status"] == "active"

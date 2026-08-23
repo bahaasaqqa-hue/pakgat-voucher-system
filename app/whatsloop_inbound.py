@@ -31,6 +31,8 @@ from app.jood_company_ops import (
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
 from app.jood_reply_validation import validate_and_clean_reply
+from app.jood_catalog import catalog_context, execute_catalog_action, load_live_catalog
+from app.jood_sales_playbook import SALES_FACTS, sales_opening_fallback
 from app.whatsloop_inbound_core import InboundEvent, normalize_inbound_event
 from app.whatsloop_security import current_webhook_token, request_signature_is_valid, webhook_token_is_valid
 
@@ -231,6 +233,11 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             state = dict(context_row.state_json or {}) if context_row else {}
             direction = str(state.get("direction") or "inbound")
             last_commitment = str(state.get("last_commitment") or "")
+            catalog = load_live_catalog(db) if direction == "outbound" and mode == "customer" else []
+            approved_urls = {item.url for item in catalog}
+            if catalog:
+                trusted_context += "\n" + SALES_FACTS
+                trusted_context += "\n" + catalog_context(catalog)
             if not persisted_outreach:
                 trusted_context += "\nConversation direction: inbound. Persona: inbound_customer_support."
             conversation_key = conversation_key_for(
@@ -267,6 +274,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
 
             decision = None
             validation = None
+            catalog_result = None
             correction = ""
             for _attempt in range(2):
                 try:
@@ -283,11 +291,19 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                     correction = str(exc)
                     decision = None
                     continue
+                catalog_result = execute_catalog_action(
+                    decision,
+                    catalog,
+                    previous_options=state.get("presented_options")
+                    if isinstance(state.get("presented_options"), list)
+                    else None,
+                )
                 validation = validate_and_clean_reply(
-                    decision["reply"],
+                    catalog_result.reply,
                     direction=direction,
                     last_commitment=last_commitment,
                     commitment_fulfilled=bool(decision.get("last_commitment_fulfilled")),
+                    approved_urls=catalog_result.approved_urls,
                 )
                 if validation.ok:
                     break
@@ -296,7 +312,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 if direction == "outbound" and mode == "merchant":
                     generated_reply = "أعتذر عن الرد السابق. معك جود من باكيجات بخصوص فرصة الشراكة؛ أرسل لي اسم النشاط والمدينة ونوع الخدمات لأوضح لكم الخطوة المناسبة."
                 elif direction == "outbound":
-                    generated_reply = "أعتذر عن الرد السابق. تقدر تتصفح عروض وبكجات باكيجات المعتمدة هنا: https://pakgat.com/ar. أي فئة تهمك أكثر؟"
+                    generated_reply = sales_opening_fallback(contact, catalog[0] if catalog else None)
                 else:
                     generated_reply = "أعتذر، لم يكتمل الرد. اكتب لي طلبك مرة أخرى باختصار وسأساعدك مباشرة."
             else:
@@ -305,6 +321,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 generated_reply,
                 allow_handoff_claim=allow_handoff_claim,
                 customer_text=normalized.text or "",
+                approved_urls=approved_urls,
             )
             if context_row and decision and validation and validation.ok:
                 if bool(decision.get("handoff_required")) and not allow_handoff_claim:
@@ -320,6 +337,12 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                     next_stage=str(decision.get("next_stage") or state.get("current_stage") or "active"),
                     last_commitment=str(decision.get("last_commitment") or ""),
                     collected_info=decision.get("collected_info") if isinstance(decision.get("collected_info"), dict) else None,
+                    presented_options=catalog_result.presented_options if catalog_result else None,
+                    selected_product_id=(
+                        catalog_result.presented_options[0]["id"]
+                        if catalog_result and len(catalog_result.presented_options) == 1
+                        else ""
+                    ),
                     status=str(decision.get("status") or "active"),
                 )
         except JoodAIError as exc:

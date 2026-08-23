@@ -10,8 +10,16 @@ class JoodStructuredDialogueTests(unittest.TestCase):
         required = set(JOOD_RESPONSE_SCHEMA["required"])
         self.assertEqual(
             required,
-            {"reply", "detected_intent", "next_stage", "last_commitment_fulfilled", "handoff_required"},
+            {
+                "reply",
+                "detected_intent",
+                "next_stage",
+                "last_commitment_fulfilled",
+                "handoff_required",
+                "action",
+            },
         )
+        self.assertIn("selected_option", JOOD_RESPONSE_SCHEMA["properties"])
 
     def test_structured_payload_uses_vertex_json_schema(self):
         payload = build_vertex_payload("تمام", structured_output=True)
@@ -28,6 +36,7 @@ class JoodStructuredDialogueTests(unittest.TestCase):
             "next_stage": "details_shared",
             "last_commitment_fulfilled": True,
             "handoff_required": False,
+            "action": "send_product_link",
         }
         payload = {"candidates": [{"content": {"parts": [{"text": json.dumps(decision, ensure_ascii=False)}]}}]}
         self.assertEqual(extract_jood_decision(payload)["reply"], long_reply)
@@ -39,6 +48,7 @@ class JoodStructuredDialogueTests(unittest.TestCase):
             "next_stage": "details_shared",
             "last_commitment_fulfilled": True,
             "handoff_required": False,
+            "action": "send_product_link",
         }
         payload = {"candidates": [{"content": {"parts": [{"text": json.dumps(decision, ensure_ascii=False)}]}}]}
         self.assertEqual(extract_jood_decision(payload), decision)
@@ -78,6 +88,18 @@ class JoodStructuredDialogueTests(unittest.TestCase):
             commitment_fulfilled=True,
         )
         self.assertFalse(result.ok)
+
+    def test_accepts_live_salla_product_url_from_dynamic_allowlist(self):
+        product_url = "https://pakgat.com/ar/p/real-product"
+        result = validate_and_clean_reply(
+            f"هذا العرض المناسب لك: {product_url}",
+            direction="outbound",
+            last_commitment="إرسال العرض",
+            commitment_fulfilled=True,
+            approved_urls={product_url},
+        )
+        self.assertTrue(result.ok)
+        self.assertIn(product_url, result.reply)
 
 
 if __name__ == "__main__":

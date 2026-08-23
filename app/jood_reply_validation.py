@@ -18,9 +18,9 @@ class ReplyValidation:
     reason: str = ""
 
 
-def _raw_markdown_url(match: re.Match[str]) -> str:
+def _raw_markdown_url(match: re.Match[str], allowed: set[str]) -> str:
     shown, target = match.group(1), match.group(2)
-    return target if target in APPROVED_URLS else shown
+    return target if target in allowed else shown
 
 
 def validate_and_clean_reply(
@@ -29,16 +29,19 @@ def validate_and_clean_reply(
     direction: str,
     last_commitment: str,
     commitment_fulfilled: bool,
+    approved_urls: set[str] | None = None,
 ) -> ReplyValidation:
-    clean = _BROKEN_MARKDOWN_URL.sub(_raw_markdown_url, str(reply or "").strip())
-    clean = _MARKDOWN_URL.sub(_raw_markdown_url, clean)
+    allowed = set(APPROVED_URLS) | set(approved_urls or ())
+    raw_url = lambda match: _raw_markdown_url(match, allowed)
+    clean = _BROKEN_MARKDOWN_URL.sub(raw_url, str(reply or "").strip())
+    clean = _MARKDOWN_URL.sub(raw_url, clean)
     seen: set[str] = set()
 
     def deduplicate(match: re.Match[str]) -> str:
         raw = match.group(0)
         suffix = raw[-1] if raw[-1:] in ".,،؛!?" else ""
         url = raw[:-1] if suffix else raw
-        if url not in APPROVED_URLS:
+        if url not in allowed:
             return raw
         if url in seen:
             return ""
@@ -49,9 +52,9 @@ def validate_and_clean_reply(
     clean = re.sub(r"[ \t]{2,}", " ", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     urls = [value.rstrip(".,،؛!?") for value in _URL.findall(clean)]
-    if any(url not in APPROVED_URLS for url in urls):
+    if any(url not in allowed for url in urls):
         return ReplyValidation(False, clean, "unapproved_url")
-    ends_with_approved_url = any(clean.endswith(url) for url in APPROVED_URLS)
+    ends_with_approved_url = any(clean.endswith(url) for url in allowed)
     if len(clean) < 20 or (clean.endswith(_BAD_ENDINGS) and not ends_with_approved_url):
         return ReplyValidation(False, clean, "incomplete_reply")
     if not ends_with_approved_url and clean[-1:] not in ".!?؟،؛😊🙂👍✅":

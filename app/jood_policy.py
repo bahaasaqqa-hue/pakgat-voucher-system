@@ -29,10 +29,10 @@ def approved_url_for_intent(intent: str) -> Optional[str]:
     return None
 
 
-def _replace_unapproved_url(match: re.Match[str]) -> str:
+def _replace_unapproved_url(match: re.Match[str], approved_urls: set[str]) -> str:
     url = match.group(0).rstrip(".,;:!?،؛")
     suffix = match.group(0)[len(url):]
-    return (url if url in APPROVED_URLS else PAKGAT_HOME_URL) + suffix
+    return (url if url in approved_urls else PAKGAT_HOME_URL) + suffix
 
 
 def _is_car_care_request(customer_text: str) -> bool:
@@ -55,6 +55,7 @@ def sanitize_jood_reply(
     *,
     allow_handoff_claim: bool = False,
     customer_text: str = "",
+    approved_urls: set[str] | None = None,
 ) -> str:
     """Apply hard output guardrails before a Jood reply reaches any channel."""
     safe = str(text or "").strip()
@@ -63,7 +64,8 @@ def sanitize_jood_reply(
 
     safe = _LEGACY_ABSOLUTE_RE.sub(CAR_CARE_URL, safe)
     safe = safe.replace(LEGACY_CAR_CARE_PATH, CAR_CARE_URL)
-    safe = _URL_RE.sub(_replace_unapproved_url, safe)
+    allowed = set(APPROVED_URLS) | set(approved_urls or ())
+    safe = _URL_RE.sub(lambda match: _replace_unapproved_url(match, allowed), safe)
 
     # Car-care replies must carry the canonical URL even if the model omitted it.
     # `customer_text` is preferred; falling back to the generated reply keeps the
