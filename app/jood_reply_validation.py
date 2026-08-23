@@ -57,7 +57,11 @@ def validate_and_clean_reply(
     ends_with_approved_url = any(clean.endswith(url) for url in allowed)
     if len(clean) < 20 or (clean.endswith(_BAD_ENDINGS) and not ends_with_approved_url):
         return ReplyValidation(False, clean, "incomplete_reply")
-    strict_sales_template = clean.endswith("استخدم كود الخصم: VIP") and bool(urls)
+    strict_sales_template = (
+        clean.endswith("خصمك يضبطك مع كود: VIP 🚀")
+        and clean.startswith("بدون قروشة.. أهلاً بك في باكيجات! 🌸")
+        and bool(urls)
+    )
     if not ends_with_approved_url and not strict_sales_template and clean[-1:] not in ".!?؟،؛😊🙂👍✅":
         return ReplyValidation(False, clean, "incomplete_sentence")
     if direction == "outbound" and any(
