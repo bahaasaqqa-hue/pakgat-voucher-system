@@ -23,6 +23,14 @@ sudo -u pakgat "$APP_DIR/.venv/bin/python" -m py_compile \
   "$APP_DIR"/app/whatsloop_inbound*.py \
   "$APP_DIR/app/whatsloop_security.py"
 
+# Import the fully assembled FastAPI app before touching the live service. This catches
+# route/model/module registration failures that syntax compilation alone cannot detect.
+(
+  cd "$APP_DIR"
+  sudo -u pakgat env PYTHONPATH=. "$APP_DIR/.venv/bin/python" -c \
+    'import main; print("Jood app import OK; routes=" + str(len(main.app.routes)))'
+)
+
 # Jood deployment gate: run every focused Jood regression test before restart.
 # This covers memory, Company AI routing, URL policy, outbound WhatsApp,
 # call-window/cooldown behavior, voice-session helpers and bridge behavior.
@@ -60,6 +68,7 @@ echo
 printf '%s\n' 'Pakgat AI Company + Corporate Benefits GCE installation completed.'
 printf '%s\n' 'Dashboard: https://voucher.pakgat.com/admin/company'
 printf '%s\n' 'Jood Control: https://voucher.pakgat.com/admin/company/jood/control'
+printf '%s\n' 'Jood WhatsApp Campaigns: https://voucher.pakgat.com/admin/company/jood/whatsapp-campaigns'
 printf '%s\n' 'Corporate Admin: https://voucher.pakgat.com/admin/company/corporate'
 printf '%s\n' 'Corporate Public: https://voucher.pakgat.com/corporate (staging path until benefits.pakgat.com DNS/TLS is enabled)'
 printf '%s\n' 'Health: https://voucher.pakgat.com/company/health'
