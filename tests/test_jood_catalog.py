@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from app.jood_catalog import CatalogItem, execute_catalog_action, parse_salla_catalog
+from app.jood_catalog import CatalogItem, execute_catalog_action, load_live_catalog, parse_salla_catalog
 
 
 class JoodCatalogTests(unittest.TestCase):
@@ -27,6 +28,30 @@ class JoodCatalogTests(unittest.TestCase):
         previous = [{"id": "11", "name": "هدية", "url": "https://pakgat.com/ar/p/11"}, {"id": "22", "name": "سيارات", "url": "https://pakgat.com/ar/p/22"}]
         result = execute_catalog_action(decision, self.items, previous_options=previous)
         self.assertIn("https://pakgat.com/ar/p/22", result.reply)
+
+    def test_empty_product_list_falls_back_to_known_order_product_details(self):
+        class FakeScalars:
+            def all(self):
+                return ["11"]
+
+        class FakeResult:
+            def scalars(self):
+                return FakeScalars()
+
+        class FakeDB:
+            def execute(self, _statement):
+                return FakeResult()
+
+        credential = type("Credential", (), {"merchant_id": "650097422"})()
+        responses = [
+            ({"data": []}, None),
+            ({"data": {"id": 11, "name": "بكج هدية", "price": {"amount": 99}, "urls": {"customer": "https://pakgat.com/ar/p/11"}}}, None),
+        ]
+        with patch("app.jood_catalog.core.latest_salla_credential", return_value=credential), patch(
+            "app.jood_catalog.core.fetch_salla_json_endpoint", side_effect=responses
+        ):
+            items = load_live_catalog(FakeDB())
+        self.assertEqual(items[0].name, "بكج هدية")
 
 
 if __name__ == "__main__":

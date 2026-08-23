@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import NamedTuple
+from urllib.parse import quote
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import application as core
@@ -58,7 +60,32 @@ def load_live_catalog(db: Session, limit: int = 30) -> list[CatalogItem]:
         f"/products?per_page={max(1, min(limit, 50))}&page=1&format=light",
         str(credential.merchant_id),
     )
-    return [] if error else parse_salla_catalog(payload)
+    items = [] if error else parse_salla_catalog(payload)
+    if items:
+        return items
+
+    # Some Salla stores do not return inactive/custom products in the list
+    # endpoint. Reuse product IDs already observed in real paid/order events and
+    # resolve each product through the official detail endpoint.
+    from app.salla_data import SallaOrderItemSnapshot
+
+    product_ids = list(
+        db.execute(
+            select(SallaOrderItemSnapshot.product_id)
+            .where(SallaOrderItemSnapshot.product_id.is_not(None))
+            .distinct()
+            .limit(min(limit, 12))
+        ).scalars().all()
+    )
+    for product_id in product_ids:
+        detail, detail_error = core.fetch_salla_json_endpoint(
+            db,
+            f"/products/{quote(str(product_id), safe='')}",
+            str(credential.merchant_id),
+        )
+        if not detail_error:
+            items.extend(parse_salla_catalog({"data": [detail.get("data", {})]}))
+    return items
 
 
 def choose_featured_product(items: list[CatalogItem], instruction: str = "") -> CatalogItem | None:
