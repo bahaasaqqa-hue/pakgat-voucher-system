@@ -118,6 +118,31 @@ def transcribe_jood_audio(
         raise JoodVoiceSTTError(str(exc)) from exc
 
 
+@core.app.post("/admin/company/jood/voice/{session_id}/stt/health")
+async def jood_voice_stt_health(session_id: int, request: Request, db: Session = Depends(core.get_db)):
+    _require_admin_api(request)
+    session = db.get(JoodCallSession, session_id)
+    if not session or session.status != "active":
+        raise HTTPException(status_code=404, detail="Active voice session not found")
+    try:
+        token = await asyncio.to_thread(_fetch_access_token, urlopen)
+    except JoodAIError as exc:
+        core.log_event(
+            db,
+            "jood_voice_stt_health_failed",
+            details=f"session={session.id}; error={str(exc)[:180]}",
+        )
+        raise HTTPException(status_code=502, detail="Vertex authentication unavailable") from exc
+    return JSONResponse(
+        {
+            "success": True,
+            "session_id": session.id,
+            "ready": bool(token),
+            "provider": "vertex",
+        }
+    )
+
+
 @core.app.post("/admin/company/jood/voice/{session_id}/stt")
 async def jood_voice_stt(session_id: int, request: Request, db: Session = Depends(core.get_db)):
     _require_admin_api(request)
