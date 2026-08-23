@@ -157,7 +157,9 @@ def normalize_inbound_event(payload: Mapping[str, Any], raw_body: bytes) -> Inbo
         channel_id=channel_id,
         message_id=message_id,
         sender=str(sender_value) if sender_value is not None else None,
-        # WhatsLoop direct-message payloads may omit chat_id; sender is the reply target.\n        # Group payloads still carry their @g.us chat id and are filtered upstream.\n        chat_id=str(chat_value if chat_value is not None else sender_value) if (chat_value is not None or sender_value is not None) else None,
+        # WhatsLoop direct-message payloads may omit chat_id; sender is the reply target.
+        # Group payloads still carry their @g.us chat id and are filtered upstream.
+        chat_id=str(chat_value if chat_value is not None else sender_value) if (chat_value is not None or sender_value is not None) else None,
         text=str(text_value) if text_value is not None else None,
         from_me=from_me,
     )
