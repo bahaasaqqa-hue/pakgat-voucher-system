@@ -43,7 +43,9 @@ class JoodCompanyOpsTests(unittest.TestCase):
         self.assertNotIn("/ar/categories/car-care", context)
 
     def test_voucher_context_uses_verified_flow(self):
-        context = trusted_context_for("كيف نظام القسائم عندكم", "customer")
+        message = "كيف نظام القسائم عندكم"
+        self.assertEqual(route_jood_intent(message, "customer"), "order_or_voucher")
+        context = trusted_context_for(message, "customer")
         self.assertIn("QR", context)
         self.assertIn("التاجر", context)
         self.assertNotIn("الإيميل", context)
