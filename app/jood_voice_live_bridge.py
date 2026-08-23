@@ -590,71 +590,7 @@ def jood_voice_runtime_script(session_id: int, request: Request):
     )
 
 
+@core.app.get("/admin/company/jood/voice/{session_id}/bridge", response_class=HTMLResponse)
 def _live_voice_bridge_page(session_id: int, request: Request, db: Session = Depends(core.get_db)):
-    response = base.voice_bridge_page(session_id, request, db)
-    if not isinstance(response, HTMLResponse):
-        return response
+    return base.voice_bridge_page(session_id, request, db)
 
-    html = bytes(response.body).decode("utf-8", errors="replace")
-    old_script = base.build_voice_bridge_script(session_id)
-    old_tag = f"<script>{old_script}</script>"
-    runtime_url = f"/admin/company/jood/voice/{int(session_id)}/runtime.js"
-    new_tag = f"<script src='{runtime_url}' defer></script>"
-    if old_tag not in html:
-        raise RuntimeError("Jood base voice script was not found in bridge page")
-    html = html.replace(old_tag, new_tag, 1)
-
-    old_status = "<div id='voice-status' class='alert' style='margin-top:14px'>جارٍ فحص Zariyah...</div>"
-    diagnostics = """
-        <div id='voice-status' class='alert' style='margin-top:14px'>جود جاهزة للفحص.</div>
-        <div class='card' style='padding:14px;margin-top:10px;background:#f8fafc'>
-          <strong>فحص جود قبل وأثناء المكالمة</strong>
-          <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px;font-size:14px'>
-            <div id='diagnostic-browser'>⏳ Chrome</div>
-            <div id='diagnostic-b1'>⏳ مدخل المكالمة</div>
-            <div id='diagnostic-signal'>⏳ صوت الطرف الآخر</div>
-            <div id='diagnostic-stt'>⏳ فهم الكلام</div>
-            <div id='diagnostic-tts'>⏳ صوت جود</div>
-          </div>
-        </div>
-    """.strip()
-    if old_status in html:
-        html = html.replace(old_status, diagnostics, 1)
-
-    html = html.replace(
-        "ابدأ الاتصال يدويًا من Phone Link، ثم اضغط «ابدأ استماع جود». Edge يجب أن يأخذ صوت الطرف الآخر من Voicemeeter، ويخرج صوته إلى AUX → B2.",
-        "اتصل يدويًا من Phone Link. بعد أن يرد الطرف الآخر اضغط «تشغيل جود» مرة واحدة؛ بعدها جود تتكلم وتستمع وترد تلقائيًا، ولا يوجد زر «ابدأ استماع».",
-        1,
-    )
-    html = html.replace(
-        "<button id='start-listening' class='btn btn-blue' type='button'>ابدأ استماع جود</button>",
-        "<button id='start-jood' class='btn btn-blue' type='button'>تشغيل جود</button>",
-        1,
-    )
-    html = html.replace(
-        "<button id='stop-listening' class='btn btn-muted' type='button'>إيقاف</button>",
-        "<button id='stop-listening' class='btn btn-muted' type='button'>إيقاف جود</button>",
-        1,
-    )
-    html = html.replace(
-        "Voice target: ar-SA-ZariyahNeural. لن يستخدم الجسر صوتًا آخر بصمت إذا لم تكن Zariyah متاحة داخل Edge Web Speech.",
-        "المسار الصوتي مُدار من جود: مدخل المكالمة → Pakgat STT → Jood Core → Zariyah → Phone Link.",
-        1,
-    )
-    return HTMLResponse(content=html, status_code=response.status_code)
-
-
-def install_live_bridge_patch() -> None:
-    target = "/admin/company/jood/voice/{session_id}/bridge"
-    for route in core.app.routes:
-        if getattr(route, "path", None) != target or "GET" not in (getattr(route, "methods", set()) or set()):
-            continue
-        route.endpoint = _live_voice_bridge_page
-        dependant = getattr(route, "dependant", None)
-        if dependant is not None:
-            dependant.call = _live_voice_bridge_page
-        return
-    raise RuntimeError("Jood voice bridge route was not registered before live bridge patch")
-
-
-install_live_bridge_patch()
