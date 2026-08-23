@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import NamedTuple
 from urllib.parse import quote
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import DateTime, String, Text, select
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
 from app.jood_policy import PAKGAT_HOME_URL
@@ -22,6 +23,53 @@ class CatalogActionResult(NamedTuple):
     reply: str
     presented_options: list[dict[str, str]]
     approved_urls: set[str]
+
+
+class JoodCatalogCache(core.Base):
+    __tablename__ = "jood_catalog_cache"
+
+    merchant_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    products_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+def _ensure_cache_table(db: Session) -> None:
+    JoodCatalogCache.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+
+def _save_catalog_cache(db: Session, merchant_id: str, items: list[CatalogItem]) -> None:
+    if not items or not isinstance(db, Session):
+        return
+    _ensure_cache_table(db)
+    row = db.get(JoodCatalogCache, merchant_id)
+    payload = json.dumps(
+        [item._asdict() for item in items],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if row is None:
+        row = JoodCatalogCache(merchant_id=merchant_id, products_json=payload)
+        db.add(row)
+    else:
+        row.products_json = payload
+        row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def _load_catalog_cache(db: Session, merchant_id: str) -> list[CatalogItem]:
+    if not isinstance(db, Session):
+        return []
+    _ensure_cache_table(db)
+    row = db.get(JoodCatalogCache, merchant_id)
+    if row is None:
+        return []
+    try:
+        payload = json.loads(row.products_json)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parse_salla_catalog({"data": payload})
 
 
 def catalog_from_presented_options(options: object) -> list[CatalogItem]:
@@ -104,20 +152,26 @@ def load_live_catalog(db: Session, limit: int = 30) -> list[CatalogItem]:
     credential = core.latest_salla_credential(db)
     if not credential:
         return []
+    merchant_id = str(credential.merchant_id)
     payload, error = core.fetch_salla_json_endpoint(
         db,
         f"/products?per_page={max(1, min(limit, 50))}&page=1&format=light",
-        str(credential.merchant_id),
+        merchant_id,
     )
     if error:
         payload, error = core.fetch_salla_json_endpoint(
             db,
             f"/products?per_page={max(1, min(limit, 50))}&page=1&format=light",
-            str(credential.merchant_id),
+            merchant_id,
         )
     items = [] if error else parse_salla_catalog(payload)
     if items:
+        _save_catalog_cache(db, merchant_id, items)
         return items
+    if error:
+        cached = _load_catalog_cache(db, merchant_id)
+        if cached:
+            return cached
 
     # Some Salla stores do not return inactive/custom products in the list
     # endpoint. Reuse product IDs already observed in real paid/order events and
@@ -136,11 +190,14 @@ def load_live_catalog(db: Session, limit: int = 30) -> list[CatalogItem]:
         detail, detail_error = core.fetch_salla_json_endpoint(
             db,
             f"/products/{quote(str(product_id), safe='')}",
-            str(credential.merchant_id),
+            merchant_id,
         )
         if not detail_error:
             items.extend(parse_salla_catalog({"data": [detail.get("data", {})]}))
-    return items
+    if items:
+        _save_catalog_cache(db, merchant_id, items)
+        return items
+    return _load_catalog_cache(db, merchant_id)
 
 
 def choose_featured_product(items: list[CatalogItem], instruction: str = "") -> CatalogItem | None:

@@ -1,6 +1,11 @@
 import unittest
 from unittest.mock import patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app import application as core
+
 from app.jood_catalog import (
     CatalogItem,
     catalog_from_presented_options,
@@ -148,6 +153,27 @@ class JoodCatalogTests(unittest.TestCase):
         ):
             items = load_live_catalog(object())
         self.assertEqual(items[0].id, "11")
+
+    def test_successful_catalog_is_persisted_and_used_during_api_outage(self):
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        core.Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+        credential = type("Credential", (), {"merchant_id": "650097422"})()
+        success = {
+            "data": [{"id": 11, "name": "بكج هدية", "price": {"amount": 99}, "urls": {"customer": "https://pakgat.com/ar/p/11"}}]
+        }
+        try:
+            with patch("app.jood_catalog.core.latest_salla_credential", return_value=credential), patch(
+                "app.jood_catalog.core.fetch_salla_json_endpoint", return_value=(success, None)
+            ):
+                first = load_live_catalog(db)
+            with patch("app.jood_catalog.core.latest_salla_credential", return_value=credential), patch(
+                "app.jood_catalog.core.fetch_salla_json_endpoint", return_value=(None, "temporary")
+            ):
+                cached = load_live_catalog(db)
+            self.assertEqual(cached, first)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":
