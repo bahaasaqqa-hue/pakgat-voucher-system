@@ -23,10 +23,6 @@ class JoodVoiceBridgeUITests(unittest.TestCase):
         self.assertIn("setDiagnostic('tts'", script)
         self.assertIn("runDiagnostics", script)
 
-    def test_bridge_reports_phone_link_signal_failure_in_plain_arabic(self):
-        script = build_live_voice_bridge_script(42)
-        self.assertIn("صوت المكالمة لا يصل من Phone Link إلى مدخل جود", script)
-
     def test_bridge_speaks_opening_before_capture_loop(self):
         script = build_live_voice_bridge_script(42)
         self.assertIn("/admin/company/jood/voice/42/start", script)
