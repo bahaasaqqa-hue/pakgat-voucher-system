@@ -38,6 +38,7 @@ from app import jood_whatsapp_campaign_ui as _jood_whatsapp_campaign_ui  # noqa:
 from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operations entry in Pakgat AI navigation
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
+from app import jood_voice_self_test_inline as _jood_voice_self_test_inline  # noqa: F401 - final Jood voice route patch: inline physical-speaker self-test
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
 from app import admin_unified_theme as _admin_unified_theme  # noqa: F401 - final global admin visual shell, import LAST
 
