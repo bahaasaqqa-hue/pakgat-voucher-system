@@ -86,7 +86,7 @@ def jood_outbound_page(contact_id: int, request: Request, db: Session = Depends(
       <section class='card' style='max-width:820px;margin:auto;padding:24px'>
         <div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap'>
           <div><h1>واتساب بواسطة جود</h1><p class='muted'>{core.esc(label)} · {core.esc(contact.contact_type)}</p></div>
-          <a class='btn btn-muted' href='/admin/company/jood'>رجوع</a>
+          <a class='btn btn-muted' href='/admin/company/jood/control'>رجوع</a>
         </div>
         <form method='post' action='/admin/company/jood/contacts/{contact.id}/whatsapp'>
           <label>ماذا تريد من جود أن تفعل؟</label>
@@ -139,7 +139,7 @@ async def jood_outbound_send(contact_id: int, request: Request, db: Session = De
         core.log_event(db, "jood_outbound_ai_failed", details=f"contact={contact.id}; error={str(exc)[:160]}")
         raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
-    message = sanitize_jood_reply(generated)
+    message = sanitize_jood_reply(generated, customer_text=goal)
     ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
     core.log_event(
         db,
@@ -160,4 +160,4 @@ async def jood_outbound_send(contact_id: int, request: Request, db: Session = De
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
         db.commit()
-    return RedirectResponse("/admin/company/jood", status_code=303)
+    return RedirectResponse("/admin/company/jood/control", status_code=303)
