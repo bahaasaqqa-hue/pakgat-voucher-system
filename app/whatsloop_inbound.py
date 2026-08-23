@@ -231,6 +231,12 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 normalized.text or "",
                 conversation_key,
             )
+            # Outbound campaign reporting is updated only after a real inbound
+            # customer message. This does not add campaign instructions to the
+            # inbound prompt or change the resolved customer/merchant mode.
+            from app.jood_whatsapp_campaign import mark_latest_dispatch_replied
+
+            mark_latest_dispatch_replied(db, contact.id)
 
             allow_handoff_claim = False
             if intent == "human_handoff":

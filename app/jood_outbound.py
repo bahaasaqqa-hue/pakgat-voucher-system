@@ -8,6 +8,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import application as core
@@ -18,9 +19,11 @@ from app.jood_company_ops import (
     can_contact,
     conversation_key_for,
     load_recent_turns,
+    normalize_contact_phone,
     trusted_context_for,
 )
 from app.jood_policy import sanitize_jood_reply
+from app.jood_whatsapp_settings import resolved_outreach_instruction
 
 
 def outbound_intent_for(mode: str) -> str:
@@ -36,6 +39,21 @@ def outbound_instruction_context(mode: str, goal: str) -> str:
         f"Target mode: {(mode or 'customer').strip().lower()}\n"
         f"Manager goal: {str(goal or '').strip()}"
     )
+
+
+def build_contact_outreach_context(contact, instruction: str) -> str:
+    lines = [str(instruction or "").strip()]
+    fields = (
+        ("Known contact name", getattr(contact, "display_name", None)),
+        ("Known business name", getattr(contact, "business_name", None)),
+        ("Known city", getattr(contact, "city", None)),
+        ("Approved Company AI notes", getattr(contact, "notes", None)),
+    )
+    for label, value in fields:
+        clean = str(value or "").strip()
+        if clean:
+            lines.append(f"{label}: {clean[:1200]}")
+    return "\n".join(line for line in lines if line)
 
 
 def _admin_redirect(request: Request):
@@ -89,8 +107,8 @@ def jood_outbound_page(contact_id: int, request: Request, db: Session = Depends(
           <a class='btn btn-muted' href='/admin/company/jood/control'>رجوع</a>
         </div>
         <form method='post' action='/admin/company/jood/contacts/{contact.id}/whatsapp'>
-          <label>ماذا تريد من جود أن تفعل؟</label>
-          <textarea class='input' name='goal' rows='7' required placeholder='مثال: عرّفي التاجر ببكجات وافتحي باب التعاون بدون ذكر عمولة نهائية.'></textarea>
+          <label>تعليمات خاصة <span class='muted'>(اختياري)</span></label>
+          <textarea class='input' name='goal' rows='5' placeholder='اتركها فارغة لاستخدام توجيه جود العام المعتمد تلقائيًا.'></textarea>
           <button class='btn btn-blue' style='margin-top:14px' type='submit'>توليد وإرسال عبر واتساب</button>
         </form>
         <p class='muted' style='margin-top:12px'>الرسالة تمر على ذاكرة جود وسياسة الروابط والـGuardrails قبل الإرسال. Do Not Contact يمنع الإرسال.</p>
@@ -111,20 +129,21 @@ async def jood_outbound_send(contact_id: int, request: Request, db: Session = De
     if not can_contact(contact):
         raise HTTPException(status_code=409, detail="Contact is marked do-not-contact")
     form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
-    goal = str((form.get("goal") or [""])[0]).strip()[:4000]
-    if not goal:
-        raise HTTPException(status_code=400, detail="Goal is required")
+    override = str((form.get("goal") or [""])[0]).strip()[:4000]
+    await send_outreach_to_contact(db, contact, override)
+    return RedirectResponse("/admin/company/jood/control", status_code=303)
+
+
+async def send_outreach_to_contact(db: Session, contact: CompanyContact, override: str = "") -> str:
+    if not can_contact(contact):
+        raise HTTPException(status_code=409, detail="Contact is marked do-not-contact")
 
     mode = contact.contact_type if contact.contact_type in {"customer", "merchant"} else "customer"
+    goal = resolved_outreach_instruction(db, mode, override)
     intent = outbound_intent_for(mode)
     history = load_recent_turns(db, contact.id, limit=8)
     trusted = trusted_context_for(goal, mode) + "\n" + outbound_instruction_context(mode, goal)
-    if contact.display_name:
-        trusted += f"\nKnown contact name: {contact.display_name}"
-    if contact.business_name:
-        trusted += f"\nKnown business name: {contact.business_name}"
-    if contact.notes:
-        trusted += f"\nApproved Company AI notes: {contact.notes[:1200]}"
+    trusted += "\n" + build_contact_outreach_context(contact, goal)
 
     try:
         generated = await asyncio.to_thread(
@@ -160,4 +179,32 @@ async def jood_outbound_send(contact_id: int, request: Request, db: Session = De
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
         db.commit()
-    return RedirectResponse("/admin/company/jood/control", status_code=303)
+    return message
+
+
+@core.app.post("/admin/company/jood/whatsapp/send-now")
+async def jood_outbound_send_now(request: Request, db: Session = Depends(core.get_db)):
+    redirect = _admin_redirect(request)
+    if redirect:
+        return redirect
+    form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
+    value = lambda name, default="": str((form.get(name) or [default])[0]).strip()
+    phone = normalize_contact_phone(value("phone"))
+    contact_type = value("contact_type", "customer").lower()
+    if not phone or contact_type not in {"customer", "merchant"}:
+        raise HTTPException(status_code=400, detail="Valid Saudi phone and contact type are required")
+    contact = db.scalar(select(CompanyContact).where(CompanyContact.phone == phone))
+    if not contact:
+        contact = CompanyContact(phone=phone, contact_type=contact_type, status="active")
+        db.add(contact)
+    contact.contact_type = contact_type
+    contact.display_name = value("display_name") or contact.display_name
+    contact.business_name = value("business_name") or contact.business_name
+    contact.city = value("city") or contact.city
+    contact.notes = value("notes") or contact.notes
+    if contact_type == "merchant" and not contact.merchant_stage:
+        contact.merchant_stage = "new"
+    db.commit()
+    db.refresh(contact)
+    await send_outreach_to_contact(db, contact, value("instruction")[:4000])
+    return RedirectResponse("/admin/company/jood/whatsapp-campaigns?individual_sent=1", status_code=303)

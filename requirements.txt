@@ -7,3 +7,4 @@ pillow
 sqlalchemy
 psycopg[binary]
 edge-tts==7.2.8
+openpyxl==3.1.5
