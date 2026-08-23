@@ -217,6 +217,11 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             history = load_recent_turns(db, contact.id, limit=8)
             intent = route_jood_intent(normalized.text or "", mode)
             trusted_context = trusted_context_for(normalized.text or "", mode)
+            from app.jood_whatsapp_context import inbound_outreach_context
+
+            persisted_outreach = inbound_outreach_context(db, contact.id)
+            if persisted_outreach:
+                trusted_context += "\n" + persisted_outreach
             conversation_key = conversation_key_for(
                 "whatsapp",
                 contact.id,

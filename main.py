@@ -20,6 +20,7 @@ from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - st
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
 from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
 from app import jood_company_ops as _jood_company_ops  # noqa: F401 - Jood contacts, memory, routing, campaigns and call logs
+from app import jood_whatsapp_context as _jood_whatsapp_context  # noqa: F401 - persistent outbound conversation objectives
 from app import whatsloop_inbound as _whatsloop_inbound  # noqa: F401 - stateful Jood inbound WhatsLoop webhook + inbox
 from app import jood_whatsapp_settings as _jood_whatsapp_settings  # noqa: F401 - persistent default outreach prompts
 from app import jood_outbound as _jood_outbound  # noqa: F401 - Company AI outbound WhatsApp actions

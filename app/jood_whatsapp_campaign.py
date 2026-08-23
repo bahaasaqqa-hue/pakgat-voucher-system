@@ -30,6 +30,7 @@ from app.jood_outbound import (
 from app.jood_policy import sanitize_jood_reply
 from app.jood_whatsapp_import import ImportedContact, parse_contact_upload
 from app.jood_whatsapp_settings import resolved_outreach_instruction
+from app.jood_whatsapp_context import remember_outreach_context
 
 
 class JoodWhatsAppCampaign(core.Base):
@@ -255,6 +256,7 @@ async def _deliver_campaign_dispatch(
         message,
         conversation_key_for("whatsapp", contact.id),
     )
+    remember_outreach_context(db, contact.id, mode, instruction, "campaign")
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
     db.commit()

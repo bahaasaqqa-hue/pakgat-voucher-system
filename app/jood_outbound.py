@@ -24,6 +24,7 @@ from app.jood_company_ops import (
 )
 from app.jood_policy import sanitize_jood_reply
 from app.jood_whatsapp_settings import resolved_outreach_instruction
+from app.jood_whatsapp_context import remember_outreach_context
 
 
 def outbound_intent_for(mode: str) -> str:
@@ -205,6 +206,7 @@ async def send_outreach_to_contact(db: Session, contact: CompanyContact, overrid
         message,
         conversation_key_for("whatsapp", contact.id),
     )
+    remember_outreach_context(db, contact.id, mode, goal, "individual")
     if contact.contact_type == "merchant" and contact.merchant_stage in {None, "new"}:
         contact.merchant_stage = "contacted"
         db.commit()
