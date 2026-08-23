@@ -14,6 +14,7 @@ DEFAULT_LOCATION = "us-central1"
 DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_INPUT_CHARS = 4000
 MAX_REPLY_CHARS = 1500
+MAX_DECISION_CHARS = 6000
 MAX_HISTORY_TURNS = 8
 
 JOOD_RESPONSE_SCHEMA = {
@@ -181,10 +182,12 @@ def build_vertex_payload(
     if structured_output:
         payload["generationConfig"]["responseMimeType"] = "application/json"
         payload["generationConfig"]["responseSchema"] = JOOD_RESPONSE_SCHEMA
+        payload["generationConfig"]["maxOutputTokens"] = 768
+        payload["generationConfig"]["temperature"] = 0.2
     return payload
 
 
-def extract_vertex_text(payload: dict[str, Any]) -> str:
+def _extract_candidate_text(payload: dict[str, Any], limit: int) -> str:
     try:
         parts = payload["candidates"][0]["content"]["parts"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -196,11 +199,15 @@ def extract_vertex_text(payload: dict[str, Any]) -> str:
     text = "".join(chunks).strip()
     if not text:
         raise JoodAIError("Vertex returned an empty reply")
-    return text[:MAX_REPLY_CHARS]
+    return text[:limit]
+
+
+def extract_vertex_text(payload: dict[str, Any]) -> str:
+    return _extract_candidate_text(payload, MAX_REPLY_CHARS)
 
 
 def extract_jood_decision(payload: dict[str, Any]) -> dict[str, Any]:
-    raw = extract_vertex_text(payload)
+    raw = _extract_candidate_text(payload, MAX_DECISION_CHARS)
     try:
         decision = json.loads(raw)
     except json.JSONDecodeError as exc:

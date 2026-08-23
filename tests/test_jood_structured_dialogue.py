@@ -18,6 +18,19 @@ class JoodStructuredDialogueTests(unittest.TestCase):
         config = payload["generationConfig"]
         self.assertEqual(config["responseMimeType"], "application/json")
         self.assertEqual(config["responseSchema"], JOOD_RESPONSE_SCHEMA)
+        self.assertGreaterEqual(config["maxOutputTokens"], 700)
+
+    def test_structured_decision_is_not_cut_at_normal_reply_limit(self):
+        long_reply = "هذه تفاصيل مفيدة ومكتملة. " * 80
+        decision = {
+            "reply": long_reply,
+            "detected_intent": "accepted_offer",
+            "next_stage": "details_shared",
+            "last_commitment_fulfilled": True,
+            "handoff_required": False,
+        }
+        payload = {"candidates": [{"content": {"parts": [{"text": json.dumps(decision, ensure_ascii=False)}]}}]}
+        self.assertEqual(extract_jood_decision(payload)["reply"], long_reply)
 
     def test_extracts_structured_decision_from_vertex_candidate(self):
         decision = {

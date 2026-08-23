@@ -269,15 +269,20 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             validation = None
             correction = ""
             for _attempt in range(2):
-                decision = await asyncio.to_thread(
-                    generate_jood_decision,
-                    normalized.text or "",
-                    history,
-                    mode,
-                    intent,
-                    trusted_context,
-                    correction,
-                )
+                try:
+                    decision = await asyncio.to_thread(
+                        generate_jood_decision,
+                        normalized.text or "",
+                        history,
+                        mode,
+                        intent,
+                        trusted_context,
+                        correction,
+                    )
+                except JoodAIError as exc:
+                    correction = str(exc)
+                    decision = None
+                    continue
                 validation = validate_and_clean_reply(
                     decision["reply"],
                     direction=direction,
