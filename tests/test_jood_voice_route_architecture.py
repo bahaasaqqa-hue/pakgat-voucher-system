@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 
 import main
-from app.jood_voice_live_bridge import build_live_voice_bridge_script
+from app import jood_voice_live_bridge as live_bridge
 
 
 BRIDGE_PATH = "/admin/company/jood/voice/{session_id}/bridge"
@@ -29,8 +29,10 @@ class JoodVoiceRouteArchitectureTests(unittest.TestCase):
         self.assertNotIn("jood_voice_self_test_inline", source)
         self.assertIn("jood_voice_self_test_page", source)
 
-    def test_live_call_script_has_no_embedded_self_test_button_or_listener(self):
-        script = build_live_voice_bridge_script(7)
+    def test_live_bridge_has_no_route_patch_or_embedded_self_test(self):
+        self.assertFalse(hasattr(live_bridge, "install_live_bridge_patch"))
+        self.assertFalse(hasattr(live_bridge, "_live_voice_bridge_page"))
+        script = live_bridge.build_live_voice_bridge_script(7)
         self.assertNotIn("testVoiceBtn", script)
         self.assertNotIn("test-jood-voice", script)
         self.assertNotIn("اختبار صوت جود", script)
