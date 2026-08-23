@@ -310,5 +310,3 @@ def install_inline_self_test_patch() -> None:
         return
     raise RuntimeError("Jood voice bridge route was not registered before inline self-test patch")
 
-
-install_inline_self_test_patch()

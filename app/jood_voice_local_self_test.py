@@ -269,5 +269,3 @@ def install_local_self_test_patch() -> None:
         return
     raise RuntimeError("Jood voice bridge route was not registered before local self-test patch")
 
-
-install_local_self_test_patch()
