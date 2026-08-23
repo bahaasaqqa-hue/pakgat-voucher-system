@@ -25,7 +25,7 @@ def _require_admin_api(request: Request) -> None:
 
 def prepare_jood_speech_text(text: str) -> str:
     """Normalize Jood speech for calm pacing and consistent Pakgat pronunciation."""
-    clean = prepare_jood_speech_text(text)
+    clean = " ".join(str(text or "").strip().split())[:MAX_TTS_CHARS]
     if not clean:
         return ""
     for brand in ("باكيجات", "باكجات", "بكجات", "Pakgat", "PAKGAT"):
@@ -38,7 +38,7 @@ async def synthesize_zariyah_mp3(
     communicator_factory: Optional[Callable[..., Any]] = None,
 ) -> bytes:
     """Generate one Zariyah MP3 payload without exposing a browser-voice dependency."""
-    clean = " ".join(str(text or "").strip().split())[:MAX_TTS_CHARS]
+    clean = prepare_jood_speech_text(text)
     if not clean:
         raise ValueError("TTS text is required")
 
