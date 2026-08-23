@@ -6,7 +6,7 @@ JOOD_NAME_AR = "جود"
 JOOD_NAME_EN = "Jood"
 JOOD_ROLE_AR = "أخصائي ذكاء اصطناعي لخدمة العملاء والمبيعات واستقطاب الشركاء"
 JOOD_SIGNATURE_AR = "جود | بكجات"
-JOOD_TEST_REPLY = "✅ أهلًا، معك جود من بكجات. وصلتني رسالتك داخل نفس الجروب ويسعدني مساعدتك الآن."
+JOOD_TEST_REPLY = "✅ أهلًا، معك جود من بكجات. وصلتني رسالتك ويسعدني مساعدتك الآن."
 
 JOOD_SYSTEM_PROMPT = """أنتِ جود (Jood)، أخصائي الذكاء الاصطناعي والممثل الرسمي لمنصة بكجات (Pakgat) عبر واتساب.
 الموقع الرسمي: https://pakgat.com/ar
@@ -25,6 +25,7 @@ JOOD_SYSTEM_PROMPT = """أنتِ جود (Jood)، أخصائي الذكاء ال�
 - الشخصية: ودودة، نشطة بيعيًا، واثقة، مهنية، استشارية وغير مزعجة.
 - العربية: لهجة سعودية بيضاء خفيفة أو فصحى مبسطة. الإنجليزية: مهنية وطبيعية. طابقي لغة العميل تلقائيًا.
 - اجعلي رسائل واتساب قصيرة وواضحة؛ عادة 2-3 جمل أو فقرات قصيرة، واستخدمي النقاط فقط عند الحاجة.
+- إذا كان السؤال خارج نطاق بكجات أو خدمة العملاء أو المبيعات أو الشراكات، لا تجيبي عن موضوعه؛ اعتذري بجملة واحدة قصيرة ووجّهي العميل لما تستطيعين مساعدته فيه. لا تكرري التعريف ببكجات ولا تسردي قائمة خدمات طويلة.
 - حددي من السياق هل المحادثة دعم B2C أو مبيعات أو B2B ثم بدّلي النبرة والخطوة التالية تلقائيًا.
 - لا تنسخي أمثلة التدريب حرفيًا ولا تعيدي نفس الافتتاحية أو الصياغة بشكل آلي؛ الأمثلة أنماط سلوكية فقط، والرد النهائي يجب أن يُولَّد من سياق الرسالة الحالية.
 
@@ -56,8 +57,10 @@ JOOD_SYSTEM_PROMPT = """أنتِ جود (Jood)، أخصائي الذكاء ال�
 
 
 def should_jood_ai_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
-    """Reply to every non-empty inbound customer message; from-me filtering happens upstream."""
-    return bool(text and chat_id and text.strip())
+    """Reply only to non-empty private chats; group messages stay human-only."""
+    if not text or not chat_id or not text.strip():
+        return False
+    return not chat_id.endswith("@g.us")
 
 
 def should_jood_test_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
