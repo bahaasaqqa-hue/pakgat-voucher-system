@@ -136,6 +136,8 @@ def execute_catalog_action(
             chosen = [item for item in items if item.id == option_id][:1]
     elif action in {"send_catalog_options", "send_product_link", "pitch_product"}:
         matches = [item for item in items if _matches(item, selected)] if selected else items
+        if not matches:
+            matches = items
         chosen = matches[:1] if action in {"send_product_link", "pitch_product"} else matches[:3]
 
     options = [{"id": item.id, "name": item.name, "url": item.url} for item in chosen]
