@@ -45,9 +45,10 @@ def start_voice_conversation(session_id: int, request: Request, db: Session = De
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    # Do not repeat the opening after a refresh/restart if this session already has dialogue.
+    # A manual start must always be audible, even when the session already has dialogue.
     if str(session.transcript or "").strip():
-        return JSONResponse({"success": True, "reply": "", "already_started": True})
+        reply = initial_voice_opening(contact.contact_type)
+        return JSONResponse({"success": True, "reply": reply, "already_started": True})
 
     reply = initial_voice_opening(contact.contact_type)
     conversation_key = conversation_key_for("voice", contact.id)
@@ -90,6 +91,12 @@ const transcriptEl = document.getElementById('voice-transcript');
 const replyEl = document.getElementById('voice-reply');
 const startBtn = document.getElementById('start-jood');
 const stopBtn = document.getElementById('stop-listening');
+const testVoiceBtn = document.createElement('button');
+testVoiceBtn.id = 'test-jood-voice';
+testVoiceBtn.className = 'btn btn-muted';
+testVoiceBtn.type = 'button';
+testVoiceBtn.textContent = '🔊 اختبار صوت جود';
+if (startBtn && startBtn.parentElement) startBtn.parentElement.insertBefore(testVoiceBtn, startBtn);
 
 const SPEECH_THRESHOLD = 0.012;
 const SILENCE_MS = 850;
@@ -475,6 +482,24 @@ async function startCaptureLoop() {
   }
 }
 
+testVoiceBtn.addEventListener('click', async () => {
+  if (started) {
+    setStatus('أوقف جود أولًا قبل اختبار الصوت المستقل.');
+    return;
+  }
+  testVoiceBtn.disabled = true;
+  setStatus('جاري اختبار صوت جود...');
+  try {
+    await ensureOutputAudioContext();
+    await speakReply('السلام عليكم، معك جود من بكجات.');
+    setStatus('تم اختبار صوت جود بنجاح.');
+  } catch (err) {
+    setStatus('تعذر اختبار صوت جود: ' + err.message);
+  } finally {
+    testVoiceBtn.disabled = false;
+  }
+});
+
 startBtn.addEventListener('click', async () => {
   if (started) return;
   startBtn.disabled = true;
@@ -539,7 +564,7 @@ setDiagnostic('b1', 'pending', 'سيتم فحص مدخل المكالمة عند
 setDiagnostic('signal', 'pending', 'بانتظار التشغيل');
 setDiagnostic('stt', 'pending', 'سيتم فحص فهم الكلام عند التشغيل');
 setDiagnostic('tts', 'pending', 'سيتم فحص صوت جود عند التشغيل');
-setStatus('جاهز. بعد أن يرد الطرف الآخر اضغط «تشغيل جود» مرة واحدة فقط.');
+setStatus('جاهز. يمكنك اختبار صوت جود بدون مكالمة، أو تشغيلها بعد أن يرد الطرف الآخر.');
 """.strip()
 
     replacements = {
