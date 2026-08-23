@@ -32,13 +32,10 @@ class JoodVoiceServerTTSTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await tts.synthesize_zariyah_mp3("   ", communicator_factory=_FakeCommunicator)
 
-    def test_overlay_uses_server_tts_and_browser_audio_context(self):
-        script = tts.build_server_tts_overlay(17)
-        self.assertIn("/admin/company/jood/voice/17/tts", script)
-        self.assertIn("AudioContext", script)
-        self.assertIn("arrayBuffer", script)
-        self.assertIn("decodeAudioData", script)
-        self.assertNotIn("SpeechSynthesisUtterance", script)
+    def test_tts_module_does_not_patch_bridge_route(self):
+        self.assertFalse(hasattr(tts, "install_server_tts_bridge_patch"))
+        self.assertFalse(hasattr(tts, "_server_tts_voice_bridge_page"))
+        self.assertFalse(hasattr(tts, "build_server_tts_overlay"))
 
     def test_tts_route_is_registered(self):
         paths = {getattr(route, "path", "") for route in tts.core.app.routes}
