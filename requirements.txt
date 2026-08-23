@@ -6,3 +6,4 @@ qrcode
 pillow
 sqlalchemy
 psycopg[binary]
+edge-tts==7.2.8
