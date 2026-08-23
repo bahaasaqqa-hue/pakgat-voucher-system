@@ -19,13 +19,19 @@ from app import ai_company_hunter as _ai_company_hunter  # noqa: F401 - merchant
 from app import ai_company_store_ops as _ai_company_store_ops  # noqa: F401 - store operations quality watch
 from app import ai_company_systems as _ai_company_systems  # noqa: F401 - 12-system hub + compact dashboard entry
 from app import ai_company_run_company as _ai_company_run_company  # noqa: F401 - one-click AUTO-safe company cycle
-from app import whatsloop_inbound as _whatsloop_inbound  # noqa: F401 - Jood inbound WhatsLoop webhook + inbox
+from app import jood_company_ops as _jood_company_ops  # noqa: F401 - Jood contacts, memory, routing, campaigns and call logs
+from app import whatsloop_inbound as _whatsloop_inbound  # noqa: F401 - stateful Jood inbound WhatsLoop webhook + inbox
+from app import jood_outbound as _jood_outbound  # noqa: F401 - Company AI outbound WhatsApp actions
+from app import jood_whatsapp_campaign as _jood_whatsapp_campaign  # noqa: F401 - queued outbound WhatsApp campaigns
+from app import jood_voice_bridge_ui as _jood_voice_bridge_ui  # noqa: F401 - half-duplex Phone Link/Voicemeeter voice bridge
 from app import corporate_benefits as _corporate_benefits  # noqa: F401 - Corporate DB/admin base
 from app import corporate_salla_profile_bridge as _corporate_salla_profile_bridge  # noqa: F401 - Salla owns login/email OTP; Google syncs eligibility/group
 from app import corporate_salla_offers as _corporate_salla_offers  # noqa: F401 - optional customer-group discount offer provisioning
 from app import ai_company_dashboard_v2 as _ai_company_dashboard_v2  # noqa: F401 - Pakgat AI visual/control experience
 from app import ai_company_mission_control_ui as _ai_company_mission_control_ui  # noqa: F401 - Mission Control home, AI Core, command bar and intelligence panels
-from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood customer-service entry in Pakgat AI navigation
+from app import jood_company_control_ui as _jood_company_control_ui  # noqa: F401 - unified Customer/Merchant WhatsApp/Voice control center
+from app import jood_whatsapp_campaign_ui as _jood_whatsapp_campaign_ui  # noqa: F401 - Jood WhatsApp campaign control page
+from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operations entry in Pakgat AI navigation
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
