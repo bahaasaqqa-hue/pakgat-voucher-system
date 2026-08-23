@@ -254,6 +254,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             generated_reply = sanitize_jood_reply(
                 generated_reply,
                 allow_handoff_claim=allow_handoff_claim,
+                customer_text=normalized.text or "",
             )
         except JoodAIError as exc:
             reply_status = "ai_failed"
