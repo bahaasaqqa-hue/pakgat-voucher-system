@@ -1,22 +1,33 @@
+import importlib.util
 import unittest
 
 from app.jood_voice_live_bridge import build_live_voice_bridge_script, initial_voice_opening
 
 
 class JoodVoiceBridgeUITests(unittest.TestCase):
-    def test_bridge_routes_recognition_from_voicemeeter_b1_track(self):
+    def test_bridge_captures_voicemeeter_b1_with_media_recorder_not_speech_recognition(self):
         script = build_live_voice_bridge_script(42)
         self.assertIn("navigator.mediaDevices.enumerateDevices", script)
         self.assertIn("Voicemeeter", script)
         self.assertIn("B1", script)
-        self.assertIn("recognition.start(audioTrack)", script)
-        self.assertNotIn("recognition.start();", script)
+        self.assertIn("MediaRecorder", script)
+        self.assertIn("/admin/company/jood/voice/42/stt", script)
+        self.assertNotIn("SpeechRecognition", script)
+        self.assertNotIn("recognition.start", script)
 
-    def test_bridge_speaks_opening_before_listening(self):
+    def test_bridge_has_visible_audio_diagnostics(self):
+        script = build_live_voice_bridge_script(42)
+        self.assertIn("setDiagnostic('b1'", script)
+        self.assertIn("setDiagnostic('signal'", script)
+        self.assertIn("setDiagnostic('stt'", script)
+        self.assertIn("setDiagnostic('tts'", script)
+        self.assertIn("runDiagnostics", script)
+
+    def test_bridge_speaks_opening_before_capture_loop(self):
         script = build_live_voice_bridge_script(42)
         self.assertIn("/admin/company/jood/voice/42/start", script)
         start_handler = script[script.index("startBtn.addEventListener"):]
-        self.assertLess(start_handler.index("await speakReply"), start_handler.index("startRecognition()"))
+        self.assertLess(start_handler.index("await speakReply"), start_handler.index("startCaptureLoop()"))
 
     def test_bridge_uses_server_tts_not_browser_speech_synthesis(self):
         script = build_live_voice_bridge_script(7)
@@ -24,6 +35,9 @@ class JoodVoiceBridgeUITests(unittest.TestCase):
         self.assertIn("AudioContext", script)
         self.assertNotIn("speechSynthesis.speak", script)
         self.assertNotIn("SpeechSynthesisUtterance", script)
+
+    def test_server_stt_module_is_present(self):
+        self.assertIsNotNone(importlib.util.find_spec("app.jood_voice_server_stt"))
 
     def test_initial_opening_matches_contact_type(self):
         merchant = initial_voice_opening("merchant")
