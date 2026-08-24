@@ -381,6 +381,26 @@ def has_open_handoff(db: Session, contact_id: int) -> bool:
     ) is not None
 
 
+def capture_open_handoff_message(db: Session, contact_id: int, text: str) -> bool:
+    row = db.scalar(
+        select(JoodHandoff).where(
+            JoodHandoff.contact_id == contact_id,
+            JoodHandoff.status == "open",
+        ).order_by(JoodHandoff.id.desc()).limit(1)
+    )
+    if not row or row.details not in {
+        "awaiting_customer_details",
+        "Voucher customer requested support",
+    }:
+        return False
+    message = str(text or "").strip()
+    if not message:
+        return False
+    row.details = message[:6000]
+    db.commit()
+    return True
+
+
 def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)

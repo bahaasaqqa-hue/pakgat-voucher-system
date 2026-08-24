@@ -29,8 +29,8 @@ def customer_response_reply(action: str) -> str | None:
     if action != "human_handoff":
         return None
     return (
-        "تم استلام طلبك ✅\n"
-        "تم تحويل طلبك إلى خدمة العملاء، وسيتم التواصل معك عند مراجعته."
+        "أكيد، كيف نقدر نساعدك؟\n"
+        "اكتب استفسارك أو المشكلة في رسالة واحدة، وستصل مباشرة إلى خدمة العملاء."
     )
 
 
@@ -101,7 +101,7 @@ def resolve_customer_response(
             )
         )
         if not open_row:
-            create_handoff(db, contact_id, "customer_support", "Voucher customer requested support")
+            create_handoff(db, contact_id, "customer_support", "awaiting_customer_details")
     return CustomerResponseResult(action=action, value=value, notification_id=prompt.id)
 
 

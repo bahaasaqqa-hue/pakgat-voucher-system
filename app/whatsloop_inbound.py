@@ -21,6 +21,7 @@ from app.jood_ai import JoodAIError, generate_jood_decision
 from app.jood_avatar_data import JOOD_AVATAR_WEBP_BASE64
 from app.jood_company_ops import (
     append_turn,
+    capture_open_handoff_message,
     conversation_key_for,
     create_handoff,
     has_open_handoff,
@@ -262,6 +263,29 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                     }
                 )
             if has_open_handoff(db, contact.id):
+                if capture_open_handoff_message(db, contact.id, normalized.text or ""):
+                    details_reply = (
+                        "وصلتنا رسالتك ✅\n"
+                        "خدمة العملاء ستتواصل معك لمساعدتك."
+                    )
+                    ok, _provider_status = await asyncio.to_thread(
+                        _send_jood_reply,
+                        normalized,
+                        details_reply,
+                    )
+                    core.log_event(
+                        db,
+                        "customer_support_details_received",
+                        details=f"contact_id={contact.id}; acknowledgement={'sent' if ok else 'failed'}",
+                    )
+                    return JSONResponse(
+                        {
+                            "success": True,
+                            "duplicate": False,
+                            "event_id": row.id,
+                            "jood_reply": "support_details_ack_sent" if ok else "support_details_ack_failed",
+                        }
+                    )
                 core.log_event(
                     db,
                     "jood_reply_paused_for_handoff",

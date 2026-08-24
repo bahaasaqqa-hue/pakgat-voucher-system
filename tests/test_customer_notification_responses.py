@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import application as core
 from app.customer_notifications import customer_response_reply, resolve_customer_response
-from app.jood_company_ops import CompanyContact, JoodHandoff
+from app.jood_company_ops import CompanyContact, JoodHandoff, capture_open_handoff_message
 
 
 class CustomerNotificationResponseTests(unittest.TestCase):
@@ -75,7 +75,30 @@ class CustomerNotificationResponseTests(unittest.TestCase):
         self.assertIsNone(customer_response_reply("rating_recorded"))
         self.assertEqual(
             customer_response_reply("human_handoff"),
-            "تم استلام طلبك ✅\nتم تحويل طلبك إلى خدمة العملاء، وسيتم التواصل معك عند مراجعته.",
+            "أكيد، كيف نقدر نساعدك؟\nاكتب استفسارك أو المشكلة في رسالة واحدة، وستصل مباشرة إلى خدمة العملاء.",
+        )
+
+    def test_first_message_after_support_choice_becomes_handoff_details(self):
+        handoff = JoodHandoff(
+            contact_id=self.contact.id,
+            kind="customer_support",
+            status="open",
+            details="awaiting_customer_details",
+        )
+        self.db.add(handoff)
+        self.db.commit()
+
+        captured = capture_open_handoff_message(
+            self.db,
+            self.contact.id,
+            "لم أستطع فتح رابط القسيمة",
+        )
+
+        self.assertTrue(captured)
+        self.db.refresh(handoff)
+        self.assertEqual(handoff.details, "لم أستطع فتح رابط القسيمة")
+        self.assertFalse(
+            capture_open_handoff_message(self.db, self.contact.id, "رسالة إضافية")
         )
 
 
