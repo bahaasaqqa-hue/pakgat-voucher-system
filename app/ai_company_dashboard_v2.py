@@ -20,6 +20,7 @@ from starlette.responses import Response
 from app import application as core
 from app import ai_company
 from app import ai_company_sources
+from app import google_analytics
 from app.ai_company_governance import CompanyApproval, generate_ceo_brief
 from app.ai_company_hunter import CompanyLead
 from app.ai_company_readiness import summarize_system_statuses
@@ -343,8 +344,45 @@ def simple_status_page(request: Request, title: str, intro: str, rows: list[tupl
 
 @core.app.get("/admin/company/visits", response_class=HTMLResponse)
 def visits_page(request: Request, db: Session = Depends(core.get_db)):
-    ga = _source_state(db, "Google Analytics")
-    return simple_status_page(request, "الزيارات", "لن نعرض رقم زيارات تقديري. هذا القسم سيتغذى من GA4 عند ربطه.", [("Google Analytics", _status_ar(ga), "ok" if ga != "Needs Integration" else "pending"), ("الجلسات / المستخدمون / التحويل", "بانتظار GA4", "pending")], [("مصادر البيانات", "/admin/company/sources")])
+    redirect = _admin_redirect(request)
+    if redirect:
+        return redirect
+
+    property_id = google_analytics.GA4_PROPERTY_ID
+    sync_error = ""
+    row = google_analytics.latest_ga4_snapshot(db, property_id) if property_id else None
+    if property_id:
+        try:
+            row = google_analytics.refresh_ga4_if_stale(db, property_id)
+        except google_analytics.GoogleAnalyticsSyncError as exc:
+            sync_error = str(exc)
+
+    ga, detail = google_analytics.google_analytics_connection_state(db, property_id)
+    if row is None:
+        rows = [
+            ("Google Analytics", _status_ar(ga), "pending"),
+            ("حالة القراءة", sync_error or detail, "pending"),
+            ("المستخدمون / الجلسات / المشاهدات", "بانتظار أول قراءة ناجحة", "pending"),
+        ]
+        intro = "لا نعرض أرقامًا تقديرية. تظهر بيانات GA4 فقط بعد قراءة فعلية بصلاحية مشاهدة."
+    else:
+        rows = [
+            ("Google Analytics", "متصل · قراءة فقط", "ok"),
+            ("المستخدمون النشطون", str(row.active_users), "ok"),
+            ("الجلسات", str(row.sessions), "ok"),
+            ("مشاهدات الصفحات", str(row.page_views), "ok"),
+            ("الأحداث الرئيسية / التحويلات", str(row.key_events), "ok"),
+            ("الفترة", "آخر 28 يومًا", "ok"),
+            ("آخر تحديث", core.fmt_dt(row.fetched_at), "ok"),
+        ]
+        intro = "أرقام فعلية من Google Analytics 4 لآخر 28 يومًا، محفوظة في Data Hub وتُحدّث كل 15 دقيقة كحد أقصى."
+    return simple_status_page(
+        request,
+        "الزيارات",
+        intro,
+        rows,
+        [("مصادر البيانات", "/admin/company/sources")],
+    )
 
 
 @core.app.get("/admin/company/analytics", response_class=HTMLResponse)

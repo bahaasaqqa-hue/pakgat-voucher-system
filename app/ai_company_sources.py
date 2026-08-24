@@ -78,6 +78,10 @@ def refresh_source_inventory(db: Session) -> None:
                 detail = "Current mode: Local fallback"
         elif source in {"Salla Products / Inventory", "Salla Abandoned Carts", "Salla Reviews"}:
             status, detail = salla_source_access(source, oauth_connected, oauth_scope)
+        elif source == "Google Analytics":
+            from app.google_analytics import google_analytics_connection_state
+
+            status, detail = google_analytics_connection_state(db)
         elif source == "GitHub":
             detail = "Source control / deployment history"
         elif source == "Google Compute Engine":
