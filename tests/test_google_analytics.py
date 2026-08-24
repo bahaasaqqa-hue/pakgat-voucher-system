@@ -157,6 +157,26 @@ class GoogleAnalyticsTests(unittest.TestCase):
             "source-token",
         )
 
+    def test_connected_dashboard_kpi_shows_sessions_and_real_context(self):
+        row = self.ga.sync_ga4_snapshot(
+            self.db,
+            "123456789",
+            fetch_report=lambda property_id: self._report(),
+        )
+
+        value, subtitle, waiting = self.ga.ga4_dashboard_kpi(row)
+
+        self.assertEqual(value, "402")
+        self.assertEqual(subtitle, "310 مستخدمًا · 1,100 مشاهدة صفحة · GA4 متصل")
+        self.assertFalse(waiting)
+
+    def test_unconnected_dashboard_kpi_keeps_honest_waiting_state(self):
+        value, subtitle, waiting = self.ga.ga4_dashboard_kpi(None)
+
+        self.assertEqual(value, "بانتظار الربط")
+        self.assertEqual(subtitle, "Google Analytics · بدون أرقام تقديرية")
+        self.assertTrue(waiting)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -205,6 +205,8 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
 
     seo_state = _source_state(db, "Google Search Console")
     ga_state = _source_state(db, "Google Analytics")
+    ga_row = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
+    ga_value, ga_subtitle, ga_waiting = google_analytics.ga4_dashboard_kpi(ga_row)
     oauth_state = _source_state(db, "Salla OAuth / Merchant API")
     whats_state = _source_state(db, "WhatsLoop")
     salla_state = _source_state(db, "Salla Webhooks")
@@ -226,7 +228,7 @@ def company_dashboard_v2(request: Request, db: Session = Depends(core.get_db)):
         <div class='ai-kpis'>
           {_kpi('الصحة التشغيلية', f"{_format_score(snapshot['overall_score'])}/100", f"التقنية {_format_score(snapshot['technology_score'])}/100 · Health للتشغيل فقط")}
           {_kpi('الطلبات', str(orders), 'طلبات مرصودة من أحداث سلة', '/admin/company/salla')}
-          {_kpi('الزيارات', 'بانتظار الربط' if ga_state == 'Needs Integration' else 'متصل', 'Google Analytics', '/admin/company/visits', ga_state == 'Needs Integration')}
+          {_kpi('الزيارات', ga_value, ga_subtitle, '/admin/company/visits', ga_waiting)}
           {_kpi('الفرص الجديدة', str(new_opps), 'اضغط لعرض الفرص والإسناد', '/admin/company/opportunities')}
         </div>
 

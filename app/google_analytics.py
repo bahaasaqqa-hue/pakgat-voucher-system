@@ -242,3 +242,15 @@ def google_analytics_connection_state(
     if row is None:
         return "Needs Integration", "Property configured; awaiting first successful GA4 read"
     return "Connected", f"GA4 read-only · last successful read {core.fmt_dt(row.fetched_at)}"
+
+
+def ga4_dashboard_kpi(
+    row: Optional[GoogleAnalyticsSnapshot],
+) -> tuple[str, str, bool]:
+    if row is None:
+        return "بانتظار الربط", "Google Analytics · بدون أرقام تقديرية", True
+    return (
+        f"{row.sessions:,}",
+        f"{row.active_users:,} مستخدمًا · {row.page_views:,} مشاهدة صفحة · GA4 متصل",
+        False,
+    )
