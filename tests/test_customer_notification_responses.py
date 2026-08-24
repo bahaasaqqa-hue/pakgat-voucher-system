@@ -79,14 +79,14 @@ class CustomerNotificationResponseTests(unittest.TestCase):
         self.assertIsNone(customer_response_reply("rating_recorded"))
         self.assertEqual(
             customer_response_reply("human_handoff"),
-            "العلم غانم، ولا تشيل هم! أبشر بسعدك ومالك إلا من يرضيك.\n\n"
-            "علشان نخدمك بسرعة، اكتب استفسارك أو المشكلة اللي تواجهك في رسالة واحدة، "
-            "وبإذن الله توصل مباشرة لخدمة العملاء ويحلونها لك.",
+            "*العلم غانم ومجمّلك! أبشر بسعدك، وما يصير خاطرك إلا طيب.*\n\n"
+            "عشان نخدمك عالسريع وبدون تأخير، اكتب استفسارك أو المشكلة اللي تواجهك بمسج واحد، "
+            "وبإذن الله توصل طوالي لخدمة العملاء ويضبطونك.",
         )
         self.assertEqual(
             customer_details_received_reply(),
-            "وصلتنا رسالتك يا غالي ✅\n"
-            "تم تسجيل المشكلة لدى خدمة العملاء، وبيتواصلون معك لمساعدتك.",
+            "*وصلنا علمك يا بعدي ✅*\n\n"
+            "أبشر بسعدك، تم رفع المشكلة لخدمة العملاء، وبيردون عليك بأسرع وقت ويضبطونك. خليك قريب!",
         )
 
     def test_first_message_after_support_choice_becomes_handoff_details(self):

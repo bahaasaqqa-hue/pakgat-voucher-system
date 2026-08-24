@@ -51,16 +51,95 @@ class CustomerNotificationTests(unittest.TestCase):
         self.assertEqual(row.status, "sent")
         self.assertIsNotNone(row.sent_at)
 
-    def test_approved_prompts_are_part_of_existing_messages(self):
+    def test_approved_customer_issuance_message_matches_the_reviewed_copy(self):
         issued = core.build_voucher_whatsapp_message(
-            "عميل", "عرض", "PKG-X", "100", "https://example.test/v/x"
+            "عميل", "عرض", "PKG-X", "100", "https://example.test/v/x",
+            "مقدم", "9-5", "0500000000", "الرياض", "https://maps.test/x",
         )
+        self.assertEqual(
+            issued,
+            "*قسيمتك جاهزة وأمورك طيبة!*\n\n"
+            "أهلاً عميل 👋\n\n"
+            "تم إصدار قسيمتك بنجاح، ومالك إلا اللي يرضيك:\n\n"
+            "• *كود VIP:* خصم 5% على طلبك القادم\n"
+            "• *العرض:* عرض\n"
+            "• *القسيمة:* PKG-X\n"
+            "• *رقم الطلب:* 100\n\n"
+            "افتح قسيمتك واعرضها للتاجر أول ما تطلع له:\n"
+            "https://example.test/v/x\n\n"
+            "*تفاصيل مقدم الخدمة:*\n\n"
+            "• *المكان:* مقدم\n"
+            "• *أوقات العمل:* 9-5\n"
+            "• *الجوال:* 0500000000\n"
+            "• *العنوان:* الرياض\n"
+            "• *الموقع:* https://maps.test/x\n\n"
+            "🔒 _قسيمتك مسؤوليتك — لا توريها إلا للتاجر نفسه._\n\n"
+            "https://pakgat.com\n"
+            "*بدون قروشة.. بكجات تضبطك*\n\n"
+            "علشان نتطمن إن كل شيء وصلك تمام، رد علينا برقم واحد بس:\n\n"
+            "1 — وصلتني القسيمة\n"
+            "2 — أحتاج فزعة من خدمة العملاء",
+        )
+
+    def test_approved_customer_redemption_message_contains_the_full_reviewed_tail(self):
+        redeemed_at = core.now_utc()
         redeemed = core.build_redemption_whatsapp_message(
-            "عميل", "عرض", "PKG-X", "100", "شريك", core.now_utc()
+            "عميل", "عرض", "PKG-X", "100", "شريك", redeemed_at
         )
-        self.assertIn("1 — وصلتني القسيمة", issued)
-        self.assertIn("2 — أحتاج مساعدة", issued)
-        self.assertIn("من 1 إلى 5", redeemed)
+        self.assertEqual(
+            redeemed,
+            "✅ *تم استخدام قسيمتك وتتهنا بها!*\n\n"
+            "يا هلا عميل 👋\n"
+            "تم تأكيد استلامك للخدمة عند شريك بالتمام والكمال.\n\n"
+            "• *العرض:* عرض\n"
+            "• *رقم القسيمة:* PKG-X\n"
+            "• *رقم الطلب:* 100\n"
+            f"• *وقت الاستخدام:* {core.fmt_dt(redeemed_at)}\n\n"
+            "⭐ *لأنك عميل Pakgat، قدرك عندنا عالي وصرت VIP.*\n\n"
+            "🎁 يضبطك كود *VIP* بخصم 5% على طلبك الجاي!\n\n"
+            "جاهز لتجربتك الجاية؟ اطّلع على العروض من هنا:\n\n"
+            "https://pakgat.com\n"
+            "*بدون قروشة.. بكجات تضبطك* ✨\n\n"
+            "يهمنا رأيك علشان نطوّر خدمتك، كيف كانت تجربتك اليوم؟\n\n"
+            "رد علينا برقم تقييمك من 1 إلى 5، بحيث 5 ممتازة وتبيّض الوجه.\n\n"
+            "سعداء بخدمتك، ونشوفك على خير قريبًا 💙",
+        )
+
+    def test_approved_merchant_messages_keep_the_fixed_pin(self):
+        sale = core.build_merchant_sale_whatsapp_message(
+            "تاجر", "عرض", "100", 2, 2, "4321"
+        )
+        redeemed_at = core.now_utc()
+        redeemed = core.build_merchant_redemption_whatsapp_message(
+            "تاجر", "عرض", "PKG-X", "100", redeemed_at
+        )
+        self.assertEqual(
+            sale,
+            "🎉 *جاتك بيعة جديدة لعرض عرض!*\n\n"
+            "يا هلا تاجر 👋\n"
+            "تم شراء عرض بنجاح عبر Pakgat، وأموركم طيبة.\n\n"
+            "• *رقم الطلب:* 100\n"
+            "• *الكمية:* 2\n"
+            "• *عدد القسائم:* 2\n\n"
+            "القسيمة الحين جاهزة عند العميل، وبيمرّك ويوريك كود الـQR قبل ما يأخذ الخدمة.\n\n"
+            "🔐 *الرمز السري لتأكيد الاستلام:* 4321\n\n"
+            "_تأكّد من مسح الرمز أو إدخال الكود أول ما يحضر العميل وتسلّمه الخدمة._\n\n"
+            "سعداء بشراكتنا معكم، ونطمح للأزين دايم 💙",
+        )
+        self.assertEqual(
+            redeemed,
+            "✅ *تم استخدام القسيمة وأموركم بالتمام!*\n\n"
+            "يا هلا تاجر 👋\n"
+            "تم تأكيد تسليم الخدمة بنجاح عبر Pakgat، وبيّض الله وجهك.\n\n"
+            "• *العرض:* عرض\n"
+            "• *رقم القسيمة:* PKG-X\n"
+            "• *رقم الطلب:* 100\n"
+            f"• *وقت الاستخدام:* {core.fmt_dt(redeemed_at)}\n\n"
+            "🔒 _القسيمة تحولت الآن إلى «مستخدمة»، وما عاد تتفعّل مرة ثانية._\n\n"
+            "سعداء جدًا بشراكتكم معنا، ونشوفك على خير 💙\n\n"
+            "https://pakgat.com\n"
+            "*بدون قروشة.. بكجات تضبطك* ✨",
+        )
 
     def test_admin_voucher_creation_queues_the_real_customer_message(self):
         body = (
