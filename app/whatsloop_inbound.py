@@ -23,11 +23,13 @@ from app.jood_company_ops import (
     append_turn,
     conversation_key_for,
     create_handoff,
+    has_open_handoff,
     load_recent_turns,
     resolve_contact_mode,
     route_jood_intent,
     trusted_context_for,
 )
+from app.customer_notifications import resolve_customer_response
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
 from app.jood_reply_validation import validate_and_clean_reply
@@ -225,6 +227,40 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
         try:
             sender_identity = normalized.sender or normalized.chat_id or ""
             contact, mode = resolve_contact_mode(db, sender_identity, normalized.text or "")
+            customer_response = resolve_customer_response(
+                db,
+                sender_identity,
+                normalized.text or "",
+                contact.id,
+            )
+            if customer_response is not None:
+                core.log_event(
+                    db,
+                    "customer_notification_response",
+                    details=f"action={customer_response.action}; notification_id={customer_response.notification_id}",
+                )
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "duplicate": False,
+                        "event_id": row.id,
+                        "jood_reply": "skipped_customer_response",
+                    }
+                )
+            if has_open_handoff(db, contact.id):
+                core.log_event(
+                    db,
+                    "jood_reply_paused_for_handoff",
+                    details=f"contact_id={contact.id}",
+                )
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "duplicate": False,
+                        "event_id": row.id,
+                        "jood_reply": "skipped_open_handoff",
+                    }
+                )
             history = load_recent_turns(db, contact.id, limit=8)
             intent = route_jood_intent(normalized.text or "", mode)
             trusted_context = trusted_context_for(normalized.text or "", mode)

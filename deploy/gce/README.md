@@ -121,3 +121,20 @@ git pull --ff-only origin gce-migration
 .venv/bin/pip install -r requirements.txt
 sudo systemctl restart pakgat-voucher
 ```
+# Customer notification outbox
+
+The application creates `customer_notifications` rows atomically with voucher issuance and redemption. Verify this first on staging. Install the service and timer files only after a simulated failed WhatsLoop delivery remains retryable and a later run marks it sent.
+
+```bash
+sudo install -m 0644 deploy/gce/pakgat-customer-notifications.service /etc/systemd/system/
+sudo install -m 0644 deploy/gce/pakgat-customer-notifications.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pakgat-customer-notifications.timer
+sudo systemctl list-timers pakgat-customer-notifications.timer
+```
+
+Rollback is non-destructive: disable the timer before rolling back application code. Leave the additive table in place so delivery history is retained.
+
+```bash
+sudo systemctl disable --now pakgat-customer-notifications.timer
+```
