@@ -372,6 +372,15 @@ def create_handoff(db: Session, contact_id: int, kind: str, details: str = "") -
     return row
 
 
+def has_open_handoff(db: Session, contact_id: int) -> bool:
+    return db.scalar(
+        select(JoodHandoff.id).where(
+            JoodHandoff.contact_id == contact_id,
+            JoodHandoff.status == "open",
+        ).limit(1)
+    ) is not None
+
+
 def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)

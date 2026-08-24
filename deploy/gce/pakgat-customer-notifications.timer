@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Pakgat customer notification dispatcher every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=pakgat-customer-notifications.service
+
+[Install]
+WantedBy=timers.target

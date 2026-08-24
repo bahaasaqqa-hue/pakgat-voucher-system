@@ -119,6 +119,28 @@ class MerchantRedemptionNotification(Base):
     last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
 
+class CustomerNotification(Base):
+    __tablename__ = "customer_notifications"
+    __table_args__ = (
+        UniqueConstraint("voucher_id", "notification_type", name="uq_customer_notification_voucher_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    voucher_id: Mapped[int] = mapped_column(Integer, index=True)
+    notification_type: Mapped[str] = mapped_column(String(40), index=True)
+    customer_phone: Mapped[str] = mapped_column(String(30), index=True)
+    message_body: Mapped[str] = mapped_column(String(5000))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_value: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class SallaOAuthCredential(Base):
     __tablename__ = "salla_oauth_credentials"
 
@@ -906,8 +928,55 @@ def build_voucher_whatsapp_message(
         + partner_block
         + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\n\n"
         "https://pakgat.com\n"
-        "بدون قروشة.. بكجات تضبطك"
+        "بدون قروشة.. بكجات تضبطك\n\n"
+        "للتأكد أن القسيمة وصلتك، رد برقم واحد فقط:\n"
+        "1 — وصلتني القسيمة\n"
+        "2 — أحتاج مساعدة من خدمة العملاء"
     )
+
+
+def ensure_customer_notification(
+    db: Session,
+    voucher: Voucher,
+    notification_type: str,
+    message_body: str,
+    *,
+    commit: bool = True,
+) -> Optional[CustomerNotification]:
+    phone = normalize_saudi_phone(voucher.customer_phone or "")
+    if not phone:
+        return None
+    existing = db.scalar(
+        select(CustomerNotification).where(
+            CustomerNotification.voucher_id == voucher.id,
+            CustomerNotification.notification_type == notification_type,
+        )
+    )
+    if existing:
+        return existing
+    notification = CustomerNotification(
+        voucher_id=voucher.id,
+        notification_type=notification_type,
+        customer_phone=phone,
+        message_body=message_body,
+        status="queued",
+    )
+    db.add(notification)
+    try:
+        if commit:
+            db.commit()
+            db.refresh(notification)
+        else:
+            db.flush()
+        return notification
+    except IntegrityError:
+        db.rollback()
+        return db.scalar(
+            select(CustomerNotification).where(
+                CustomerNotification.voucher_id == voucher.id,
+                CustomerNotification.notification_type == notification_type,
+            )
+        )
 
 
 def send_voucher_whatsapp(
@@ -995,43 +1064,18 @@ def send_voucher_whatsapp(
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
 
-def send_redemption_whatsapp(
-    voucher_id: int,
-    customer_phone: str,
+def build_redemption_whatsapp_message(
     customer_name: str,
     product_name: str,
     voucher_code: str,
     order_id: str,
     merchant_name: str,
     redeemed_at: datetime,
-) -> None:
-    """Notify the customer only after a voucher redemption succeeds."""
-    phone = normalize_saudi_phone(customer_phone)
-
-    if not phone:
-        with SessionLocal() as db:
-            log_event(
-                db,
-                "redemption_whatsapp_skipped",
-                voucher_id,
-                "Customer phone is missing.",
-            )
-        return
-
-    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
-        with SessionLocal() as db:
-            log_event(
-                db,
-                "redemption_whatsapp_skipped",
-                voucher_id,
-                "WhatsLoop environment variables are missing.",
-            )
-        return
-
+) -> str:
     name = (customer_name or "عميل بكجات").strip()
     display_order_id = str(order_id or "").split(":", 1)[0]
     used_at = fmt_dt(redeemed_at)
-    message = (
+    return (
         "✅ تم استبدال قسيمتك بنجاح\n\n"
         f"مرحباً {name} 🎁\n\n"
         f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
@@ -1044,8 +1088,28 @@ def send_redemption_whatsapp(
         "اكتشف عرضك القادم:\n"
         "https://pakgat.com\n\n"
         "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
+        "كيف كانت تجربتك؟ قيّمها من 1 إلى 5، حيث 5 ممتازة.\n\n"
         "شكراً لاختيارك Pakgat\n"
         "بدون قروشة.. بكجات تضبطك ✨"
+    )
+
+
+def send_redemption_whatsapp(
+    voucher_id: int,
+    customer_phone: str,
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    merchant_name: str,
+    redeemed_at: datetime,
+) -> None:
+    """Legacy direct sender retained for compatibility; outbox code does not schedule it."""
+    phone = normalize_saudi_phone(customer_phone)
+    if not phone or not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
+        return
+    message = build_redemption_whatsapp_message(
+        customer_name, product_name, voucher_code, order_id, merchant_name, redeemed_at
     )
 
     body = json.dumps(
@@ -1485,7 +1549,7 @@ def notify_merchant_after_redemption(voucher_id: int) -> None:
         )
 
 
-def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
+def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7, *, commit: bool = True) -> Voucher:
     existing = db.scalar(select(Voucher).where(Voucher.order_id == order_id, Voucher.product_id == product_id))
     if existing:
         return existing
@@ -1493,7 +1557,11 @@ def create_voucher_record(db: Session, order_id: str, product_id: str, product_n
         voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, customer_name=customer_name, customer_phone=customer_phone, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
         db.add(voucher)
         try:
-            db.commit(); db.refresh(voucher); return voucher
+            if commit:
+                db.commit(); db.refresh(voucher)
+            else:
+                db.flush()
+            return voucher
         except Exception:
             db.rollback()
     raise HTTPException(status_code=500, detail="Unable to generate a unique voucher")
@@ -1674,25 +1742,32 @@ async def redeem_voucher(verification_token: str, request: Request, background_t
         return HTMLResponse(build_verification_page(voucher, "لم يتم إعداد رمز لهذا التاجر. تواصل مع إدارة بكجات."), status_code=503)
     if not hmac.compare_digest(entered, expected):
         return HTMLResponse(build_verification_page(voucher, "رمز التاجر غير صحيح."), status_code=403)
-    result = db.execute(update(Voucher).where(Voucher.id == voucher.id, Voucher.status == "active", Voucher.expires_at >= now_utc()).values(status="redeemed", redeemed_at=now_utc()).execution_options(synchronize_session=False))
-    db.commit()
-    db.refresh(voucher)
+    redeemed_at = now_utc()
+    result = db.execute(update(Voucher).where(Voucher.id == voucher.id, Voucher.status == "active", Voucher.expires_at >= redeemed_at).values(status="redeemed", redeemed_at=redeemed_at).execution_options(synchronize_session=False))
     if result.rowcount != 1:
+        db.rollback()
         log_event(db, "redeem_conflict", voucher.id, "Concurrent or invalid redemption attempt")
         update_voucher_status(voucher, db)
         return HTMLResponse(build_verification_page(voucher, "تعذر اعتماد القسيمة؛ ربما تم استخدامها في نفس اللحظة."), status_code=409)
-    log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
-    background_tasks.add_task(
-        send_redemption_whatsapp,
-        voucher.id,
-        voucher.customer_phone or "",
+    voucher.status = "redeemed"
+    voucher.redeemed_at = redeemed_at
+    ensure_customer_notification(
+        db,
+        voucher,
+        "voucher_redeemed",
+        build_redemption_whatsapp_message(
         voucher.customer_name or "",
         voucher.product_name,
         voucher.code,
         voucher.order_id,
         voucher.merchant_name,
-        voucher.redeemed_at or now_utc(),
+        redeemed_at,
+        ),
+        commit=False,
     )
+    db.commit()
+    db.refresh(voucher)
+    log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
     background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return HTMLResponse(build_verification_page(voucher))
 
@@ -1820,24 +1895,31 @@ def admin_redeem_voucher(voucher_id: int, request: Request, background_tasks: Ba
     voucher = db.get(Voucher, voucher_id)
     if not voucher:
         raise HTTPException(status_code=404, detail="Voucher not found")
-    result = db.execute(update(Voucher).where(Voucher.id == voucher_id, Voucher.status == "active", Voucher.expires_at >= now_utc()).values(status="redeemed", redeemed_at=now_utc()).execution_options(synchronize_session=False))
-    db.commit()
+    redeemed_at = now_utc()
+    result = db.execute(update(Voucher).where(Voucher.id == voucher_id, Voucher.status == "active", Voucher.expires_at >= redeemed_at).values(status="redeemed", redeemed_at=redeemed_at).execution_options(synchronize_session=False))
     if result.rowcount != 1:
+        db.rollback()
         log_event(db, "admin_redeem_failed", voucher_id, "Voucher was not active")
         raise HTTPException(status_code=409, detail="Voucher is not active")
-    db.refresh(voucher)
-    log_event(db, "voucher_redeemed", voucher_id, "Redeemed from admin dashboard")
-    background_tasks.add_task(
-        send_redemption_whatsapp,
-        voucher.id,
-        voucher.customer_phone or "",
+    voucher.status = "redeemed"
+    voucher.redeemed_at = redeemed_at
+    ensure_customer_notification(
+        db,
+        voucher,
+        "voucher_redeemed",
+        build_redemption_whatsapp_message(
         voucher.customer_name or "",
         voucher.product_name,
         voucher.code,
         voucher.order_id,
         voucher.merchant_name,
-        voucher.redeemed_at or now_utc(),
+        redeemed_at,
+        ),
+        commit=False,
     )
+    db.commit()
+    db.refresh(voucher)
+    log_event(db, "voucher_redeemed", voucher_id, "Redeemed from admin dashboard")
     background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return RedirectResponse(f"/admin/vouchers/{voucher_id}", status_code=303)
 
@@ -2731,6 +2813,24 @@ async def salla_webhook(
                 )
             )
             if existing:
+                verification_url = BASE_URL + "/v/" + existing.verification_token
+                ensure_customer_notification(
+                    db,
+                    existing,
+                    "voucher_issued",
+                    build_voucher_whatsapp_message(
+                        customer_name=existing.customer_name or customer_name,
+                        product_name=existing.product_name,
+                        voucher_code=existing.code,
+                        order_id=base_order_id,
+                        verification_url=verification_url,
+                        partner_name=customer_partner_name or None,
+                        partner_hours=partner_hours,
+                        partner_contact=partner_contact,
+                        partner_address=partner_address,
+                        partner_map_url=partner_map_url,
+                    ),
+                )
                 log_event(
                     db,
                     "voucher_already_exists",
@@ -2749,8 +2849,29 @@ async def salla_webhook(
                 customer_phone=customer_phone,
                 option_name=item_option_name(item),
                 validity_days=int(env("DEFAULT_VALIDITY_DAYS", "7")),
+                commit=False,
             )
             verification_url = BASE_URL + "/v/" + voucher.verification_token
+            ensure_customer_notification(
+                db,
+                voucher,
+                "voucher_issued",
+                build_voucher_whatsapp_message(
+                    customer_name=customer_name,
+                    product_name=voucher.product_name,
+                    voucher_code=voucher.code,
+                    order_id=base_order_id,
+                    verification_url=verification_url,
+                    partner_name=customer_partner_name or None,
+                    partner_hours=partner_hours,
+                    partner_contact=partner_contact,
+                    partner_address=partner_address,
+                    partner_map_url=partner_map_url,
+                ),
+                commit=False,
+            )
+            db.commit()
+            db.refresh(voucher)
             created.append(
                 {"code": voucher.code, "verification_url": verification_url}
             )
@@ -2770,23 +2891,7 @@ async def salla_webhook(
                     verification_url,
                     voucher.expires_at,
                 )
-            if customer_phone:
-                background_tasks.add_task(
-                    send_voucher_whatsapp,
-                    voucher.id,
-                    customer_phone,
-                    customer_name,
-                    voucher.product_name,
-                    voucher.code,
-                    base_order_id,
-                    verification_url,
-                    customer_partner_name or None,
-                    partner_hours,
-                    partner_contact,
-                    partner_address,
-                    partner_map_url,
-                )
-            else:
+            if not customer_phone:
                 log_event(
                     db,
                     "whatsapp_skipped",
