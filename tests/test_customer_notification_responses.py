@@ -7,7 +7,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app import application as core
-from app.customer_notifications import customer_response_reply, resolve_customer_response
+from app.customer_notifications import (
+    customer_details_received_reply,
+    customer_response_reply,
+    resolve_customer_response,
+)
 from app.jood_company_ops import CompanyContact, JoodHandoff, capture_open_handoff_message
 
 
@@ -75,7 +79,14 @@ class CustomerNotificationResponseTests(unittest.TestCase):
         self.assertIsNone(customer_response_reply("rating_recorded"))
         self.assertEqual(
             customer_response_reply("human_handoff"),
-            "أكيد، كيف نقدر نساعدك؟\nاكتب استفسارك أو المشكلة في رسالة واحدة، وستصل مباشرة إلى خدمة العملاء.",
+            "العلم غانم، ولا تشيل هم! أبشر بسعدك ومالك إلا من يرضيك.\n\n"
+            "علشان نخدمك بسرعة، اكتب استفسارك أو المشكلة اللي تواجهك في رسالة واحدة، "
+            "وبإذن الله توصل مباشرة لخدمة العملاء ويحلونها لك.",
+        )
+        self.assertEqual(
+            customer_details_received_reply(),
+            "وصلتنا رسالتك يا غالي ✅\n"
+            "تم تسجيل المشكلة لدى خدمة العملاء، وبيتواصلون معك لمساعدتك.",
         )
 
     def test_first_message_after_support_choice_becomes_handoff_details(self):

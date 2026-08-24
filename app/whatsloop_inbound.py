@@ -30,7 +30,11 @@ from app.jood_company_ops import (
     route_jood_intent,
     trusted_context_for,
 )
-from app.customer_notifications import customer_response_reply, resolve_customer_response
+from app.customer_notifications import (
+    customer_details_received_reply,
+    customer_response_reply,
+    resolve_customer_response,
+)
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
 from app.jood_reply_validation import validate_and_clean_reply
@@ -264,10 +268,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 )
             if has_open_handoff(db, contact.id):
                 if capture_open_handoff_message(db, contact.id, normalized.text or ""):
-                    details_reply = (
-                        "وصلتنا رسالتك ✅\n"
-                        "خدمة العملاء ستتواصل معك لمساعدتك."
-                    )
+                    details_reply = customer_details_received_reply()
                     ok, _provider_status = await asyncio.to_thread(
                         _send_jood_reply,
                         normalized,
