@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 36295)
-Total output lines: 2953
-
 # PAKGAT_BUILD: 2026-08-11-CUSTOMER-PARTNER-DETAILS-v9.1
 import os
 import json
@@ -1491,7 +1488,373 @@ def send_merchant_redemption_whatsapp(
                 if row:
                     row.status = "sent"
                     row.sent_at = now_utc()
-   …6295 tokens truncated…pt HTTPException:
+                    row.last_error = None
+                    log_db.commit()
+            log_event(
+                log_db,
+                sent_action,
+                voucher_id,
+                (
+                    f"order={order_id}; phone={masked_phone(phone)}; "
+                    f"http_status={status_code}; response={response_text[:180]}"
+                ),
+            )
+        return True
+    except HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        mark_failed(f"http_status={exc.code}; response={error_text[:220]}")
+    except (URLError, TimeoutError, OSError) as exc:
+        mark_failed(f"error={type(exc).__name__}: {exc}")
+    return False
+
+
+def notify_merchant_after_redemption(voucher_id: int) -> None:
+    """Send one merchant confirmation per voucher/merchant phone after redemption."""
+    with SessionLocal() as db:
+        voucher = db.get(Voucher, voucher_id)
+        if not voucher or voucher.status != "redeemed":
+            return
+        phones, partner_name, base_order_id = merchant_redemption_context(db, voucher)
+        if not phones:
+            return
+        redeemed_at = voucher.redeemed_at or now_utc()
+        product_name = voucher.product_name
+        voucher_code = voucher.code
+
+        jobs: list[tuple[int, str]] = []
+        for phone in phones:
+            notification_id = reserve_merchant_redemption_notification(db, voucher.id, phone)
+            if notification_id:
+                jobs.append((notification_id, phone))
+            else:
+                log_event(
+                    db,
+                    "merchant_redemption_duplicate_skipped",
+                    voucher.id,
+                    f"order={base_order_id}; phone={masked_phone(phone)}",
+                )
+
+    # Network calls run after the DB session is closed.
+    for notification_id, phone in jobs:
+        send_merchant_redemption_whatsapp(
+            notification_id,
+            voucher_id,
+            phone,
+            partner_name,
+            product_name,
+            voucher_code,
+            base_order_id,
+            redeemed_at,
+            test_mode=False,
+        )
+
+
+def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7, *, commit: bool = True) -> Voucher:
+    existing = db.scalar(select(Voucher).where(Voucher.order_id == order_id, Voucher.product_id == product_id))
+    if existing:
+        return existing
+    for _ in range(5):
+        voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, customer_name=customer_name, customer_phone=customer_phone, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
+        db.add(voucher)
+        try:
+            if commit:
+                db.commit(); db.refresh(voucher)
+            else:
+                db.flush()
+            return voucher
+        except Exception:
+            db.rollback()
+    raise HTTPException(status_code=500, detail="Unable to generate a unique voucher")
+
+
+def log_event(
+    db: Session,
+    action: str,
+    voucher_id: Optional[int] = None,
+    details: Optional[str] = None,
+    created_at: Optional[datetime] = None,
+) -> None:
+    db.add(
+        AuditLog(
+            voucher_id=voucher_id,
+            action=action,
+            details=(details or "")[:500] or None,
+            created_at=created_at or now_utc(),
+        )
+    )
+    db.commit()
+
+
+def backfill_audit_logs(db: Session) -> int:
+    """Create missing historical audit entries without duplicating existing logs."""
+    vouchers = list(db.scalars(select(Voucher).order_by(Voucher.id)).all())
+    if not vouchers:
+        return 0
+
+    existing = set(
+        db.execute(
+            select(AuditLog.voucher_id, AuditLog.action).where(AuditLog.voucher_id.is_not(None))
+        ).all()
+    )
+    added = 0
+    for voucher in vouchers:
+        created_key = (voucher.id, "voucher_created")
+        if created_key not in existing:
+            db.add(
+                AuditLog(
+                    voucher_id=voucher.id,
+                    action="voucher_created",
+                    details="Historical voucher imported into audit log",
+                    created_at=voucher.created_at or now_utc(),
+                )
+            )
+            added += 1
+
+        if voucher.status == "redeemed" and voucher.redeemed_at:
+            redeemed_key = (voucher.id, "voucher_redeemed")
+            if redeemed_key not in existing:
+                db.add(
+                    AuditLog(
+                        voucher_id=voucher.id,
+                        action="voucher_redeemed",
+                        details="Historical redemption imported into audit log",
+                        created_at=voucher.redeemed_at,
+                    )
+                )
+                added += 1
+
+        if voucher.status == "expired":
+            expired_key = (voucher.id, "voucher_expired")
+            if expired_key not in existing:
+                db.add(
+                    AuditLog(
+                        voucher_id=voucher.id,
+                        action="voucher_expired",
+                        details="Historical expiration imported into audit log",
+                        created_at=voucher.expires_at or now_utc(),
+                    )
+                )
+                added += 1
+
+    if added:
+        db.commit()
+    return added
+
+
+def update_voucher_status(voucher: Voucher, db: Session) -> str:
+    expires = voucher.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if voucher.status == "active" and expires < now_utc():
+        voucher.status = "expired"
+        db.commit()
+        db.refresh(voucher)
+        # Write the expiration only after the voucher update succeeds.
+        existing = db.scalar(
+            select(AuditLog.id).where(
+                AuditLog.voucher_id == voucher.id,
+                AuditLog.action == "voucher_expired",
+            )
+        )
+        if not existing:
+            log_event(db, "voucher_expired", voucher.id, "Voucher expired automatically", expires)
+    return voucher.status
+
+
+def status_badge(value: str) -> str:
+    labels = {"active": "صالحة", "redeemed": "مستخدمة", "expired": "منتهية"}
+    return f"<span class='badge badge-{esc(value)}'>{labels.get(value, esc(value))}</span>"
+
+
+@app.get("/")
+def home():
+    return {"status": "running", "service": "Pakgat Voucher System", "version": "3.0", "build": BUILD_VERSION, "admin": BASE_URL + "/admin/login", "database": "connected"}
+
+
+@app.get("/health")
+def health():
+    with engine.connect():
+        pass
+    with SessionLocal() as db:
+        oauth_ready = db.scalar(select(func.count(SallaOAuthCredential.id))) or 0
+    return {
+        "ok": True,
+        "database": "connected",
+        "build": BUILD_VERSION,
+        "salla_oauth": "connected" if oauth_ready else "waiting_authorization",
+        "merchant_pin": "configured" if MERCHANT_NOTIFICATION_PIN else "missing",
+    }
+
+
+@app.post("/api/vouchers", response_model=VoucherResponse, status_code=status.HTTP_201_CREATED)
+def create_voucher(payload: VoucherCreate, db: Session = Depends(get_db)):
+    existing = db.scalar(select(Voucher).where(Voucher.order_id == payload.order_id, Voucher.product_id == payload.product_id))
+    if existing:
+        raise HTTPException(status_code=409, detail="A voucher already exists for this order and product.")
+    voucher = create_voucher_record(db, payload.order_id, payload.product_id, payload.product_name, payload.merchant_name, payload.customer_name, payload.customer_phone, payload.option_name, payload.validity_days)
+    log_event(db, "voucher_created", voucher.id, "Created through API")
+    url = BASE_URL + "/v/" + voucher.verification_token
+    return VoucherResponse(code=voucher.code, verification_token=voucher.verification_token, verification_url=url, qr_url=url + "/qr.png", status=voucher.status, expires_at=voucher.expires_at)
+
+
+def build_verification_page(voucher: Voucher, error_message: Optional[str] = None) -> str:
+    states = {
+        "active": ("القسيمة صالحة", "#15803d", "#dcfce7", "✓"),
+        "redeemed": ("تم استخدام القسيمة", "#b91c1c", "#fee2e2", "✓"),
+        "expired": ("القسيمة منتهية", "#a16207", "#fef3c7", "!"),
+    }
+    title, color, bg, icon = states.get(voucher.status, ("حالة غير معروفة", "#475569", "#e2e8f0", "?"))
+    redeem = ""
+    if voucher.status == "active":
+        err = f"<div class='alert alert-error'>{esc(error_message)}</div>" if error_message else ""
+        redeem = f"""{err}<details style='margin-top:18px'><summary style='cursor:pointer;font-weight:900;color:#2446ba'>خاص بالتاجر: اعتماد القسيمة</summary><form method='post' action='/v/{esc(voucher.verification_token)}/redeem' onsubmit="return confirm('هل تم تقديم الخدمة فعلًا للعميل؟ لا يمكن التراجع بعد الاعتماد.');" style='margin-top:14px'><label>رمز التاجر</label><input class='input' name='merchant_code' type='password' inputmode='numeric' maxlength='30' required placeholder='أدخل رمز التاجر'><button class='btn btn-blue' style='width:100%;margin-top:12px' type='submit'>تأكيد تقديم الخدمة</button></form><div style='background:#f8fafc;padding:14px;border-radius:12px;margin-top:12px;line-height:1.8'><strong>شروط التاجر</strong><div>• تحقق من اسم العرض والخيار وتاريخ الصلاحية.</div><div>• لا تعتمد القسيمة إلا بعد تقديم الخدمة كاملة.</div><div>• بعد الاعتماد تصبح القسيمة مستخدمة ولا يمكن استخدامها مرة أخرى.</div></div></details>"""
+    used = f"<div class='alert alert-error' style='margin-top:16px'>تم الاستخدام بتاريخ <strong>{fmt_dt(voucher.redeemed_at)}</strong></div>" if voucher.status == "redeemed" else ""
+    body = f"""<main class='wrap' style='padding:28px 0 44px'><section class='card' style='max-width:620px;margin:auto;padding:26px'><div style='text-align:center'><div style='font-size:36px;font-weight:900;color:#2446ba'>بكجات</div><div class='muted'>Pakgat</div></div><div style='margin:20px 0;padding:18px;border-radius:16px;text-align:center;background:{bg};color:{color}'><div style='width:52px;height:52px;border-radius:50%;background:{color};color:white;display:grid;place-items:center;margin:0 auto 8px;font-size:28px;font-weight:900'>{icon}</div><h2 style='margin:0'>{title}</h2></div><div style='text-align:center;margin-bottom:20px'><h1 style='font-size:24px;margin:0 0 7px'>{esc(voucher.product_name)}</h1><div class='muted'>{esc(voucher.merchant_name)}</div></div><img src='/v/{esc(voucher.verification_token)}/qr.png' alt='QR' width='210' height='210' style='display:block;margin:0 auto 18px;border:8px solid white;box-shadow:0 8px 28px rgba(20,40,90,.12);border-radius:16px'><div class='table-wrap'><table><tr><th>كود القسيمة</th><td dir='ltr' style='font-weight:900;color:#2446ba'>{esc(voucher.code)}</td></tr><tr><th>الخيار</th><td>{esc(voucher.option_name or 'غير محدد')}</td></tr><tr><th>اسم العميل</th><td>{esc(voucher.customer_name or 'عميل بكجات')}</td></tr><tr><th>تاريخ الانتهاء</th><td>{fmt_dt(voucher.expires_at)}</td></tr></table></div><div style='background:#eefcff;border:1px solid #bdeff7;padding:16px;border-radius:14px;margin-top:18px;line-height:1.9'><strong>مرحبًا بك في بكجات 👋</strong><div>نتمنى لك تجربة ممتعة والاستمتاع بعرضك الخاص من موقع بكجات.</div></div><div style='background:#f8fafc;padding:16px;border-radius:14px;margin-top:14px;line-height:1.9'><strong>شروط استخدام العميل</strong><div>• يجب استخدام القسيمة قبل تاريخ انتهاء الصلاحية الموضح.</div><div>• القسيمة صالحة للخدمة والخيار المذكورين فقط.</div><div>• لا تشارك رابط القسيمة أو رمز QR مع أي شخص.</div><div>• لا تعرض القسيمة للتاجر إلا عند استلام الخدمة.</div><div>• القسيمة لا تستبدل نقدًا، وبعد اعتمادها لا يمكن استخدامها مرة أخرى.</div></div>{redeem}{used}<div class='muted' style='text-align:center;margin-top:20px;font-size:13px'>نظام التحقق من القسائم — Pakgat</div></section></main>"""
+    return page_shell("قسيمة بكجات", body)
+
+
+@app.get("/v/{verification_token}", response_class=HTMLResponse)
+def verify_voucher(verification_token: str, db: Session = Depends(get_db)):
+    voucher = db.scalar(select(Voucher).where(Voucher.verification_token == verification_token))
+    if not voucher:
+        return HTMLResponse(page_shell("القسيمة غير موجودة", "<main class='wrap' style='padding:50px 0'><div class='card' style='padding:30px;text-align:center'><h1 style='color:#b91c1c'>القسيمة غير موجودة</h1><p>تأكد من صحة الرابط أو تواصل مع إدارة بكجات.</p></div></main>"), status_code=404)
+    update_voucher_status(voucher, db)
+    return HTMLResponse(build_verification_page(voucher))
+
+
+@app.post("/v/{verification_token}/redeem", response_class=HTMLResponse)
+async def redeem_voucher(verification_token: str, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    voucher = db.scalar(select(Voucher).where(Voucher.verification_token == verification_token))
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher not found")
+    update_voucher_status(voucher, db)
+    if voucher.status != "active":
+        return HTMLResponse(build_verification_page(voucher), status_code=409)
+    form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
+    entered = form.get("merchant_code", [""])[0].strip()
+    expected = str(
+        MERCHANT_CODES.get(voucher.merchant_name)
+        or MERCHANT_CODES.get("*")
+        or MERCHANT_NOTIFICATION_PIN
+        or ""
+    ).strip()
+    if not expected:
+        return HTMLResponse(build_verification_page(voucher, "لم يتم إعداد رمز لهذا التاجر. تواصل مع إدارة بكجات."), status_code=503)
+    if not hmac.compare_digest(entered, expected):
+        return HTMLResponse(build_verification_page(voucher, "رمز التاجر غير صحيح."), status_code=403)
+    redeemed_at = now_utc()
+    result = db.execute(update(Voucher).where(Voucher.id == voucher.id, Voucher.status == "active", Voucher.expires_at >= redeemed_at).values(status="redeemed", redeemed_at=redeemed_at).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        db.rollback()
+        log_event(db, "redeem_conflict", voucher.id, "Concurrent or invalid redemption attempt")
+        update_voucher_status(voucher, db)
+        return HTMLResponse(build_verification_page(voucher, "تعذر اعتماد القسيمة؛ ربما تم استخدامها في نفس اللحظة."), status_code=409)
+    voucher.status = "redeemed"
+    voucher.redeemed_at = redeemed_at
+    ensure_customer_notification(
+        db,
+        voucher,
+        "voucher_redeemed",
+        build_redemption_whatsapp_message(
+        voucher.customer_name or "",
+        voucher.product_name,
+        voucher.code,
+        voucher.order_id,
+        voucher.merchant_name,
+        redeemed_at,
+        ),
+        commit=False,
+    )
+    db.commit()
+    db.refresh(voucher)
+    log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
+    background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
+    return HTMLResponse(build_verification_page(voucher))
+
+
+@app.get("/v/{verification_token}/qr.png", response_class=Response)
+def voucher_qr(verification_token: str, db: Session = Depends(get_db)):
+    voucher = db.scalar(select(Voucher).where(Voucher.verification_token == verification_token))
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher not found.")
+    return Response(generate_qr_png(BASE_URL + "/v/" + verification_token), media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page(request: Request):
+    if valid_admin_token(request.cookies.get("pakgat_admin", "")):
+        return RedirectResponse("/admin", status_code=303)
+    body = """<main class='wrap' style='padding:55px 0'><section class='card' style='max-width:430px;margin:auto;padding:28px'><h1 style='margin-top:0'>دخول إدارة القسائم</h1><p class='muted'>أدخل بيانات الإدارة المضافة في Render.</p><form method='post' action='/admin/login'><label>اسم المستخدم</label><input class='input' name='username' autocomplete='username' required><label style='margin-top:14px'>كلمة المرور</label><input class='input' name='password' type='password' autocomplete='current-password' required><button class='btn btn-blue' style='width:100%;margin-top:18px' type='submit'>تسجيل الدخول</button></form></section></main>"""
+    return HTMLResponse(page_shell("تسجيل دخول الإدارة", body))
+
+
+@app.post("/admin/login")
+async def admin_login(request: Request):
+    form = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
+    username = form.get("username", [""])[0].strip()
+    password = form.get("password", [""])[0]
+    if not ADMIN_PASSWORD:
+        return HTMLResponse(page_shell("خطأ إعداد", "<main class='wrap' style='padding:50px 0'><div class='alert alert-error'>يجب إضافة ADMIN_PASSWORD في Environment على Render أولًا.</div></main>"), status_code=503)
+    if not (hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD)):
+        return HTMLResponse(page_shell("فشل الدخول", "<main class='wrap' style='padding:50px 0'><div class='card' style='max-width:500px;margin:auto;padding:25px'><div class='alert alert-error'>بيانات الدخول غير صحيحة.</div><a class='btn btn-blue' href='/admin/login'>المحاولة مرة أخرى</a></div></main>"), status_code=403)
+    expires = int((now_utc() + timedelta(hours=12)).timestamp())
+    response = RedirectResponse("/admin", status_code=303)
+    response.set_cookie("pakgat_admin", admin_token(username, expires), max_age=43200, httponly=True, secure=COOKIE_SECURE, samesite="lax")
+    return response
+
+
+@app.post("/admin/logout")
+def admin_logout():
+    response = RedirectResponse("/admin/login", status_code=303)
+    response.delete_cookie("pakgat_admin")
+    return response
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(request: Request, q: str = "", voucher_status: str = "", page: int = 1, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    # lazily mark expired vouchers
+    db.execute(update(Voucher).where(Voucher.status == "active", Voucher.expires_at < now_utc()).values(status="expired").execution_options(synchronize_session=False)); db.commit()
+    page = max(1, page)
+    page_size = 25
+    filters = []
+    if q.strip():
+        term = f"%{q.strip()}%"
+        filters.append(or_(Voucher.code.ilike(term), Voucher.customer_name.ilike(term), Voucher.order_id.ilike(term), Voucher.product_name.ilike(term)))
+    if voucher_status in {"active", "redeemed", "expired"}:
+        filters.append(Voucher.status == voucher_status)
+    total_filtered = db.scalar(select(func.count(Voucher.id)).where(*filters)) or 0
+    total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+    page = min(page, total_pages)
+    statement = select(Voucher).where(*filters).order_by(Voucher.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    vouchers = list(db.scalars(statement).all())
+    counts = dict(db.execute(select(Voucher.status, func.count(Voucher.id)).group_by(Voucher.status)).all())
+    rows = "".join(f"<tr><td><a style='color:#2446ba;font-weight:900' href='/admin/vouchers/{v.id}'>{esc(v.code)}</a></td><td>{esc(v.customer_name or '—')}</td><td>{esc(v.product_name)}</td><td>{status_badge(v.status)}</td><td>{fmt_dt(v.expires_at)}</td><td><a class='btn btn-muted' href='/admin/vouchers/{v.id}'>عرض</a></td></tr>" for v in vouchers) or "<tr><td colspan='6' style='text-align:center;padding:30px'>لا توجد نتائج.</td></tr>"
+    prev_link = f"/admin?q={quote(q)}&voucher_status={quote(voucher_status)}&page={page-1}" if page > 1 else ""
+    next_link = f"/admin?q={quote(q)}&voucher_status={quote(voucher_status)}&page={page+1}" if page < total_pages else ""
+    pagination = f"<div style='display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px'>{f'<a class=\"btn btn-muted\" href=\"{prev_link}\">السابق</a>' if prev_link else ''}<strong>صفحة {page} من {total_pages}</strong>{f'<a class=\"btn btn-muted\" href=\"{next_link}\">التالي</a>' if next_link else ''}</div>"
+    body = f"""<main class='wrap' style='padding:28px 0 48px'><h1>لوحة إدارة القسائم</h1><div class='grid grid-mobile-1' style='grid-template-columns:repeat(4,1fr);margin-bottom:18px'><div class='card' style='padding:18px'><div class='muted'>الإجمالي</div><strong style='font-size:29px'>{sum(counts.values())}</strong></div><div class='card' style='padding:18px'><div class='muted'>صالحة</div><strong style='font-size:29px;color:#15803d'>{counts.get('active',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>مستخدمة</div><strong style='font-size:29px;color:#b91c1c'>{counts.get('redeemed',0)}</strong></div><div class='card' style='padding:18px'><div class='muted'>منتهية</div><strong style='font-size:29px;color:#a16207'>{counts.get('expired',0)}</strong></div></div><section class='card' style='padding:18px'><form method='get' action='/admin' class='grid grid-mobile-1' style='grid-template-columns:2fr 1fr auto;align-items:end'><div><label>البحث</label><input class='input' name='q' value='{esc(q)}' placeholder='كود القسيمة، العميل، الطلب أو العرض'></div><div><label>الحالة</label><select class='select' name='voucher_status'><option value=''>الكل</option><option value='active' {'selected' if voucher_status=='active' else ''}>صالحة</option><option value='redeemed' {'selected' if voucher_status=='redeemed' else ''}>مستخدمة</option><option value='expired' {'selected' if voucher_status=='expired' else ''}>منتهية</option></select></div><button class='btn btn-blue' type='submit'>بحث</button></form><div class='table-wrap' style='margin-top:18px'><table><thead><tr><th>الكود</th><th>العميل</th><th>العرض</th><th>الحالة</th><th>الانتهاء</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>{pagination}</section></main>"""
+    return HTMLResponse(page_shell("لوحة الإدارة", body, admin=True))
+
+
+@app.get("/admin/vouchers/new", response_class=HTMLResponse)
+def admin_new_voucher(request: Request):
+    try:
+        require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    body = """<main class='wrap' style='padding:28px 0 48px'><section class='card' style='max-width:800px;margin:auto;padding:24px'><h1>إنشاء قسيمة جديدة</h1><form method='post' action='/admin/vouchers/new' class='grid grid-mobile-1' style='grid-template-columns:1fr 1fr'><div><label>رقم الطلب</label><input class='input' name='order_id' required></div><div><label>رقم المنتج</label><input class='input' name='product_id' required></div><div><label>اسم العرض / الخدمة</label><input class='input' name='product_name' required></div><div><label>اسم التاجر</label><input class='input' name='merchant_name' value='Pakgat' required></div><div><label>اسم العميل</label><input class='input' name='customer_name'></div><div><label>جوال العميل</label><input class='input' name='customer_phone'></div><div><label>الخيار</label><input class='input' name='option_name'></div><div><label>مدة الصلاحية بالأيام</label><input class='input' name='validity_days' type='number' value='7' min='1' max='365' required></div><button class='btn btn-blue' style='grid-column:1/-1' type='submit'>إنشاء القسيمة</button></form></section></main>"""
+    return HTMLResponse(page_shell("قسيمة جديدة", body, admin=True))
+
+
+@app.post("/admin/vouchers/new")
+async def admin_create_voucher(request: Request, db: Session = Depends(get_db)):
+    try:
+        require_admin(request)
+    except HTTPException:
         return RedirectResponse("/admin/login", status_code=303)
     f = parse_qs((await request.body()).decode("utf-8", errors="ignore"))
     get = lambda k, d="": f.get(k, [d])[0].strip()
