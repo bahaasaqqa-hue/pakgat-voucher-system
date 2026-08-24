@@ -1860,7 +1860,23 @@ async def admin_create_voucher(request: Request, db: Session = Depends(get_db)):
     get = lambda k, d="": f.get(k, [d])[0].strip()
     try:
         validity = max(1, min(365, int(get("validity_days", "7"))))
-        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity)
+        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity, commit=False)
+        verification_url = BASE_URL + "/v/" + voucher.verification_token
+        ensure_customer_notification(
+            db,
+            voucher,
+            "voucher_issued",
+            build_voucher_whatsapp_message(
+                customer_name=voucher.customer_name or "عميل بكجات",
+                product_name=voucher.product_name,
+                voucher_code=voucher.code,
+                order_id=voucher.order_id,
+                verification_url=verification_url,
+            ),
+            commit=False,
+        )
+        db.commit()
+        db.refresh(voucher)
         log_event(db, "voucher_created", voucher.id, "Created from admin dashboard")
     except Exception as exc:
         return HTMLResponse(page_shell("تعذر الإنشاء", f"<main class='wrap' style='padding:40px 0'><div class='alert alert-error'>تعذر إنشاء القسيمة: {esc(exc)}</div></main>", admin=True), status_code=400)
