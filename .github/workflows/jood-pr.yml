@@ -5,14 +5,15 @@ on:
     branches:
       - gce-migration
     paths:
-      - 'app/jood*.py'
-      - 'app/whatsloop_inbound.py'
+      - 'app/**/*.py'
       - 'main.py'
-      - 'tests/test_jood_*.py'
+      - 'tests/**/*.py'
+      - 'requirements.txt'
       - 'deploy/gce/install-ai-company.sh'
       - '.github/workflows/jood-pr.yml'
   push:
     branches:
+      - 'gce-migration'
       - 'feat/jood-company-ai-omnichannel'
       - 'fix-jood-*'
 
@@ -21,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      DATABASE_URL: sqlite:///:memory:
+      DATABASE_URL: 'sqlite:///:memory:'
       ADMIN_PASSWORD: test-only-password
       ADMIN_SECRET: test-only-admin-secret
       PUBLIC_BASE_URL: https://example.test
@@ -39,12 +40,11 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Compile Jood modules
-        run: |
-          python -m py_compile main.py app/jood*.py app/whatsloop_inbound*.py app/whatsloop_security.py
+      - name: Compile application modules
+        run: python -m compileall -q main.py app
 
       - name: Import full application
         run: python -c "import main; print('ROUTES=' + str(len(main.app.routes)))"
 
-      - name: Run Jood regression tests
-        run: python -m unittest discover -s tests -p 'test_jood_*.py' -v
+      - name: Run full regression suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
