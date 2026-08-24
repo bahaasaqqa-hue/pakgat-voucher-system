@@ -143,6 +143,20 @@ class GoogleAnalyticsTests(unittest.TestCase):
         self.assertEqual(row.status, "Connected")
         self.assertIn("read-only", row.detail)
 
+    def test_dedicated_service_account_uses_keyless_impersonation(self):
+        with (
+            patch.object(self.ga, "GA4_SERVICE_ACCOUNT", "pakgat-ga4-reader@example.iam.gserviceaccount.com"),
+            patch.object(self.ga, "_metadata_access_token", return_value="source-token"),
+            patch.object(self.ga, "_impersonated_access_token", return_value="analytics-token") as impersonate,
+        ):
+            token = self.ga._analytics_access_token()
+
+        self.assertEqual(token, "analytics-token")
+        impersonate.assert_called_once_with(
+            "pakgat-ga4-reader@example.iam.gserviceaccount.com",
+            "source-token",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

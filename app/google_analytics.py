@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request as UrlRequest, urlopen
 
 from sqlalchemy import DateTime, Integer, String, select
@@ -19,6 +20,7 @@ from app import application as core
 
 
 GA4_PROPERTY_ID = core.env("GOOGLE_ANALYTICS_PROPERTY_ID").strip()
+GA4_SERVICE_ACCOUNT = core.env("GOOGLE_ANALYTICS_SERVICE_ACCOUNT").strip()
 METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/instance/"
     "service-accounts/default/token"
@@ -84,6 +86,50 @@ def _metadata_access_token() -> str:
     return token
 
 
+def _impersonated_access_token(service_account: str, source_token: str) -> str:
+    url = (
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+        f"{quote(service_account, safe='')}:generateAccessToken"
+    )
+    body = json.dumps(
+        {
+            "delegates": [],
+            "scope": ["https://www.googleapis.com/auth/analytics.readonly"],
+            "lifetime": "3600s",
+        }
+    ).encode("utf-8")
+    request = UrlRequest(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {source_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise GoogleAnalyticsSyncError("GoogleServiceAccountImpersonationPermissionError") from exc
+        raise GoogleAnalyticsSyncError("GoogleServiceAccountImpersonationError") from exc
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        raise GoogleAnalyticsSyncError("GoogleServiceAccountImpersonationError") from exc
+    token = str(payload.get("accessToken") or "").strip()
+    if not token:
+        raise GoogleAnalyticsSyncError("GoogleServiceAccountImpersonationError")
+    return token
+
+
+def _analytics_access_token() -> str:
+    source_token = _metadata_access_token()
+    if GA4_SERVICE_ACCOUNT:
+        return _impersonated_access_token(GA4_SERVICE_ACCOUNT, source_token)
+    return source_token
+
+
 def fetch_ga4_report(property_id: str) -> dict:
     if not str(property_id or "").isdigit():
         raise GoogleAnalyticsSyncError("GoogleAnalyticsPropertyIdError")
@@ -103,7 +149,7 @@ def fetch_ga4_report(property_id: str) -> dict:
         GA4_RUN_REPORT_URL.format(property_id=property_id),
         data=body,
         headers={
-            "Authorization": f"Bearer {_metadata_access_token()}",
+            "Authorization": f"Bearer {_analytics_access_token()}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
