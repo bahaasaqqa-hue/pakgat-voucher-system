@@ -29,7 +29,7 @@ from app.jood_company_ops import (
     route_jood_intent,
     trusted_context_for,
 )
-from app.customer_notifications import resolve_customer_response
+from app.customer_notifications import customer_response_reply, resolve_customer_response
 from app.jood_identity import JOOD_ROLE_AR, should_jood_ai_reply
 from app.jood_policy import sanitize_jood_reply
 from app.jood_reply_validation import validate_and_clean_reply
@@ -234,6 +234,20 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 contact.id,
             )
             if customer_response is not None:
+                acknowledgement = customer_response_reply(customer_response.action)
+                acknowledgement_status = "skipped_customer_response"
+                if acknowledgement:
+                    ok, _provider_status = await asyncio.to_thread(
+                        _send_jood_reply,
+                        normalized,
+                        acknowledgement,
+                    )
+                    acknowledgement_status = "support_ack_sent" if ok else "support_ack_failed"
+                    core.log_event(
+                        db,
+                        "customer_support_ack_sent" if ok else "customer_support_ack_failed",
+                        details=f"notification_id={customer_response.notification_id}",
+                    )
                 core.log_event(
                     db,
                     "customer_notification_response",
@@ -244,7 +258,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                         "success": True,
                         "duplicate": False,
                         "event_id": row.id,
-                        "jood_reply": "skipped_customer_response",
+                        "jood_reply": acknowledgement_status,
                     }
                 )
             if has_open_handoff(db, contact.id):

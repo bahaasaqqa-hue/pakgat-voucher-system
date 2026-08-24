@@ -25,6 +25,15 @@ class CustomerResponseResult:
     notification_id: int
 
 
+def customer_response_reply(action: str) -> str | None:
+    if action != "human_handoff":
+        return None
+    return (
+        "تم استلام طلبك ✅\n"
+        "تم تحويل طلبك إلى خدمة العملاء، وسيتم التواصل معك عند مراجعته."
+    )
+
+
 def send_whatsloop_text(phone: str, message_body: str) -> None:
     if not core.WHATSLOOP_API_BASE_URL or not core.WHATSLOOP_API_TOKEN:
         raise RuntimeError("WhatsLoopConfigurationError")

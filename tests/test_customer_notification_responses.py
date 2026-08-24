@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app import application as core
-from app.customer_notifications import resolve_customer_response
+from app.customer_notifications import customer_response_reply, resolve_customer_response
 from app.jood_company_ops import CompanyContact, JoodHandoff
 
 
@@ -69,6 +69,14 @@ class CustomerNotificationResponseTests(unittest.TestCase):
     def test_invalid_rating_remains_for_normal_routing(self):
         self._prompt("voucher_redeemed")
         self.assertIsNone(resolve_customer_response(self.db, "966500000000", "6", self.contact.id))
+
+    def test_only_support_request_gets_an_immediate_acknowledgement(self):
+        self.assertIsNone(customer_response_reply("receipt_confirmed"))
+        self.assertIsNone(customer_response_reply("rating_recorded"))
+        self.assertEqual(
+            customer_response_reply("human_handoff"),
+            "تم استلام طلبك ✅\nتم تحويل طلبك إلى خدمة العملاء، وسيتم التواصل معك عند مراجعته.",
+        )
 
 
 if __name__ == "__main__":
