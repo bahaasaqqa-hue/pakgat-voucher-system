@@ -56,11 +56,47 @@ JOOD_SYSTEM_PROMPT = """أنتِ جود (Jood)، أخصائي الذكاء ال�
 """
 
 
+def is_probable_business_auto_reply(text: Optional[str]) -> bool:
+    """Detect strong WhatsApp Business auto-reply patterns without blocking short human greetings."""
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+
+    strong_markers = (
+        "شكرا لك على تواصلك مع",
+        "شكرًا لك على تواصلك مع",
+        "شكراً لك على تواصلك مع",
+        "شكرا لتواصلك مع",
+        "شكرًا لتواصلك مع",
+        "شكراً لتواصلك مع",
+        "يرجى إخبارنا بما يمكننا القيام به لمساعدتك",
+        "تم استلام رسالتك وسنقوم بالرد",
+        "نحن غير متاحين حاليا",
+        "نحن غير متاحين حاليًا",
+        "خارج أوقات العمل",
+        "thank you for contacting",
+        "thanks for contacting",
+        "we have received your message",
+        "we've received your message",
+        "we are unavailable right now",
+        "we're unavailable right now",
+        "we will get back to you",
+        "will respond as soon as possible",
+        "outside of business hours",
+        "this is an automated message",
+        "away message",
+        "auto-reply",
+    )
+    return any(marker in normalized for marker in strong_markers)
+
+
 def should_jood_ai_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
-    """Reply only to non-empty private chats; group messages stay human-only."""
+    """Reply only to real non-empty private messages; skip groups and strong business auto-replies."""
     if not text or not chat_id or not text.strip():
         return False
-    return not chat_id.endswith("@g.us")
+    if chat_id.endswith("@g.us"):
+        return False
+    return not is_probable_business_auto_reply(text)
 
 
 def should_jood_test_reply(text: Optional[str], chat_id: Optional[str]) -> bool:
