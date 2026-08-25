@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 
@@ -7,6 +8,34 @@ from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, inspect, 
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
+
+
+MERCHANT_CAMPAIGN_CHOICE_ONE_REPLY = """*أبشروا بالسعد 🙌*
+
+خلّونا نوضح لكم فكرة *«بكجات»* على السريع:
+
+إحنا ما نكتفي بنشر *كوبون* عادي؛ نشتغل على عرضكم كـ *حملة تسويق ومبيعات متكاملة*:
+• *نجهز الفكرة والتصميم والمحتوى* ونبرزها في منصتنا.
+• *نسوّق للعرض* عبر السوشال ميديا وقنواتنا لاستقطاب عملاء جدد بالرياض.
+• *بدون أي رسوم أو تكاليف مسبقة* — نسبتنا فقط من المبيعات الفعلية اللي تجيكم عن طريقنا.
+• *طريقة الاستبدال سهلة وآمنة:* العميل يستلم قسيمة رقمية (QR)، تمسحونها بجوالكم خلال ثوانٍ وينتهي الموضوع بدون أي قروشة!
+
+يعني من الآخر: *أنتم تقدمون الخدمة.. وإحنا نجهز العرض، نسوّق له، وندير القسيمة.*
+
+والتعاون طبعاً بعقد رسمي وموثق يحفظ حقوق الجميع 🤝
+
+*والخطوة الجاية بسيطة 👌*
+راح يتواصل معكم *مسؤول الشراكات في بكجات* مباشرة، ويكمل معكم تفاصيل العرض، آلية التعاون والعقد، ونرتب الإطلاق سوا.
+
+*تشرفنا فيكم، وبإذن الله تكون بداية تعاون جميل ومثمر 🚀*"""
+
+
+@dataclass(frozen=True)
+class MerchantCampaignChoiceAction:
+    reply: str
+    handoff_kind: str
+    handoff_details: str
+    next_stage: str
 
 
 def infer_last_commitment(message: str) -> str:
@@ -118,6 +147,30 @@ def active_outreach_context(db: Session, contact_id: int) -> JoodWhatsAppContext
             JoodWhatsAppContext.contact_id == contact_id,
             JoodWhatsAppContext.active.is_(True),
         )
+    )
+
+
+def merchant_campaign_choice_action(
+    message: str,
+    mode: str,
+    context_row: JoodWhatsAppContext | None,
+) -> MerchantCampaignChoiceAction | None:
+    if str(mode or "").strip().lower() != "merchant" or context_row is None:
+        return None
+
+    state = dict(context_row.state_json or {})
+    if state.get("direction") != "outbound" or state.get("persona") != "outbound_merchant_acquisition":
+        return None
+
+    choice = " ".join(str(message or "").strip().split())
+    if choice not in {"1", "١"}:
+        return None
+
+    return MerchantCampaignChoiceAction(
+        reply=MERCHANT_CAMPAIGN_CHOICE_ONE_REPLY,
+        handoff_kind="merchant_partnership",
+        handoff_details="merchant_campaign_choice_1_ready_for_partnership_manager",
+        next_stage="handed_off",
     )
 
 

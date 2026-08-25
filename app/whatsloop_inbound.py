@@ -306,6 +306,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             from app.jood_whatsapp_context import (
                 active_outreach_context,
                 inbound_outreach_context,
+                merchant_campaign_choice_action,
                 update_outreach_state,
             )
 
@@ -345,6 +346,56 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
             from app.jood_whatsapp_campaign import mark_latest_dispatch_replied
 
             mark_latest_dispatch_replied(db, contact.id)
+
+            merchant_choice = merchant_campaign_choice_action(
+                normalized.text or "",
+                mode,
+                context_row,
+            )
+            if merchant_choice is not None:
+                ok, provider_status = await asyncio.to_thread(
+                    _send_jood_reply,
+                    normalized,
+                    merchant_choice.reply,
+                )
+                if ok:
+                    append_turn(
+                        db,
+                        contact.id,
+                        "whatsapp",
+                        "assistant",
+                        merchant_choice.reply,
+                        conversation_key,
+                    )
+                    create_handoff(
+                        db,
+                        contact.id,
+                        merchant_choice.handoff_kind,
+                        details=merchant_choice.handoff_details,
+                    )
+                    update_outreach_state(
+                        db,
+                        contact.id,
+                        next_stage=merchant_choice.next_stage,
+                        last_commitment="",
+                        status="handed_off",
+                    )
+                core.log_event(
+                    db,
+                    "jood_merchant_campaign_handoff_sent" if ok else "jood_merchant_campaign_handoff_failed",
+                    details=(
+                        f"contact_id={contact.id}; channel={normalized.channel_id or '-'}; "
+                        f"provider={provider_status[:250]}"
+                    ),
+                )
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "duplicate": False,
+                        "event_id": row.id,
+                        "jood_reply": "merchant_handoff_sent" if ok else "merchant_handoff_failed",
+                    }
+                )
 
             allow_handoff_claim = False
             if intent == "human_handoff":
