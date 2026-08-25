@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 
 from sqlalchemy import DateTime, Float, Integer, String, select
@@ -63,6 +63,17 @@ def parse_dimension_rows(payload: dict, limit: int = 10) -> list[dict]:
             "position": round(max(0.0, float(row.get("position") or 0)), 2),
         })
     return result
+
+
+def display_page_label(value: str) -> str:
+    path = unquote(urlsplit(str(value or "")).path or "/").rstrip("/") or "/"
+    if path == "/":
+        return "الصفحة الرئيسية"
+    if path == "/ar":
+        return "الصفحة العربية"
+    if path == "/en":
+        return "الصفحة الإنجليزية"
+    return "مسار: " + path[:90]
 
 
 def _impersonated_token(service_account: str, source_token: str) -> str:

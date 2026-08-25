@@ -484,7 +484,7 @@ def seo_page(request: Request, db: Session = Depends(core.get_db)):
         for item in __import__("json").loads(search_row.top_queries_json or "[]")[:5]:
             rows.append(("كلمة بحث · " + str(item.get("value") or "")[:70], f"{item.get('clicks', 0):,} نقرة · {item.get('impressions', 0):,} ظهور", "ok"))
         for item in __import__("json").loads(search_row.top_pages_json or "[]")[:5]:
-            rows.append(("صفحة عضوية · " + str(item.get("value") or "")[:70], f"{item.get('clicks', 0):,} نقرة · {item.get('impressions', 0):,} ظهور", "ok"))
+            rows.append(("صفحة عضوية · " + google_search_console.display_page_label(str(item.get("value") or "")), f"{item.get('clicks', 0):,} نقرة · {item.get('impressions', 0):,} ظهور", "ok"))
     else:
         rows.extend([("Google Search Console", _status_ar(sc), "pending"), ("حالة القراءة", search_error or "بانتظار منح حساب الخدمة صلاحية قراءة", "pending"), ("الكلمات · الظهور · CTR · الفهرسة", "تظهر بعد أول مزامنة ناجحة", "pending")])
     return simple_status_page(request, "SEO وGoogle", "GA4 يقيس الزيارات والسلوك، وSearch Console يقيس البحث العضوي دون أرقام تقديرية.", rows, [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])

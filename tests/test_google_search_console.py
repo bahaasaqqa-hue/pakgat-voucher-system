@@ -38,6 +38,14 @@ class SearchConsoleTests(unittest.TestCase):
         row = gsc.sync_snapshot(self.db, "sc-domain:pakgat.com", fetcher=lambda *_: {"rows": []})
         self.assertEqual((row.clicks, row.impressions, row.ctr, row.position), (0, 0, 0.0, 0.0))
 
+    def test_page_labels_do_not_render_raw_urls_that_merge_with_metrics(self):
+        self.assertEqual(gsc.display_page_label("https://pakgat.com/"), "الصفحة الرئيسية")
+        self.assertEqual(gsc.display_page_label("https://pakgat.com/ar"), "الصفحة العربية")
+        self.assertEqual(gsc.display_page_label("https://pakgat.com/en/"), "الصفحة الإنجليزية")
+        label = gsc.display_page_label("https://pakgat.com/%D8%A7%D9%84%D9%87%D8%AF%D8%A7%D9%8A%D8%A7/c2865369")
+        self.assertTrue(label.startswith("مسار: /الهدايا/"))
+        self.assertNotIn("https://", label)
+
 
 if __name__ == "__main__":
     unittest.main()
