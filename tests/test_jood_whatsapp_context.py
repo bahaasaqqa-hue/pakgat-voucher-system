@@ -90,14 +90,31 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         self.assertIsNotNone(action)
         self.assertEqual(action.handoff_kind, "merchant_partnership")
         self.assertEqual(action.next_stage, "handed_off")
-        self.assertIn("*أبشروا بالسعد 🙌*", action.reply)
-        self.assertIn("*حملة تسويق ومبيعات متكاملة*", action.reply)
-        self.assertIn("*بدون أي رسوم أو تكاليف مسبقة*", action.reply)
-        self.assertIn("قسيمة رقمية (QR)", action.reply)
-        self.assertIn("تمسحونها بجوالكم خلال ثوانٍ", action.reply)
-        self.assertIn("*مسؤول الشراكات في بكجات*", action.reply)
+        self.assertIn("أبشروا بالسعد 🙌", action.reply)
+        self.assertIn("حملة تسويق ومبيعات متكاملة", action.reply)
+        self.assertIn("بدون أي رسوم أو تكاليف مسبقة", action.reply)
+        self.assertIn("قسيمة رقمية", action.reply)
+        self.assertIn("تمسحونها بالجوال خلال ثوانٍ", action.reply)
+        self.assertIn("مسؤول الشراكات في بكجات", action.reply)
         self.assertIn("بعقد رسمي وموثق يحفظ حقوق الجميع", action.reply)
         self.assertNotIn("أرسلوا لنا", action.reply)
+
+    def test_campaign_choice_one_reply_avoids_bidi_fragile_whatsapp_formatting(self):
+        row = remember_outreach_context(
+            self.db,
+            9,
+            "merchant",
+            "استقطاب التاجر إلى بكجات",
+            "campaign",
+        )
+        action = whatsapp_context.merchant_campaign_choice_action("1", "merchant", row)
+
+        self.assertIsNotNone(action)
+        self.assertNotIn("*", action.reply)
+        self.assertNotIn("(QR)", action.reply)
+        self.assertNotIn(" QR", action.reply)
+        self.assertIn("✅ نجهز الفكرة والتصميم والمحتوى", action.reply)
+        self.assertIn("✅ طريقة الاستبدال سهلة وآمنة", action.reply)
 
     def test_choice_one_also_works_for_individual_outbound_merchant_test_flow(self):
         resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
@@ -115,7 +132,7 @@ class JoodWhatsAppContextTests(unittest.TestCase):
 
         self.assertIsNotNone(action)
         self.assertEqual(action.handoff_kind, "merchant_partnership")
-        self.assertIn("*مسؤول الشراكات في بكجات*", action.reply)
+        self.assertIn("مسؤول الشراكات في بكجات", action.reply)
 
     def test_campaign_choice_action_does_not_hijack_questions_or_customers(self):
         resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
