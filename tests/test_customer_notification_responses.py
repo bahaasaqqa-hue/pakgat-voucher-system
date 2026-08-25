@@ -61,13 +61,16 @@ class CustomerNotificationResponseTests(unittest.TestCase):
 
     def test_merchant_numeric_reply_is_not_consumed_by_customer_notification_prompt(self):
         prompt = self._prompt("voucher_issued")
+        self.contact.contact_type = "merchant"
+        self.db.commit()
+
         result = resolve_customer_response(
             self.db,
             "966500000000",
             "1",
             self.contact.id,
-            contact_type="merchant",
         )
+
         self.assertIsNone(result)
         self.db.refresh(prompt)
         self.assertIsNone(prompt.response_value)
