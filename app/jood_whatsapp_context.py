@@ -176,7 +176,7 @@ def merchant_campaign_choice_action(
 
 
 def inbound_outreach_context(db: Session, contact_id: int) -> str:
-    row = active_outreach_context(db, contact.id)
+    row = active_outreach_context(db, contact_id)
     if not row or not row.objective.strip():
         return ""
     return (
