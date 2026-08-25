@@ -23,6 +23,7 @@ from app import ai_company_sources
 from app import google_analytics
 from app import google_search_console
 from app import security_watch
+from app import social_attribution
 from app.ai_company_governance import CompanyApproval, generate_ceo_brief
 from app.ai_company_growth import growth_metrics
 from app.ai_company_hunter import CompanyLead
@@ -493,11 +494,13 @@ def seo_page(request: Request, db: Session = Depends(core.get_db)):
 @core.app.get("/admin/company/social", response_class=HTMLResponse)
 def social_page(request: Request, db: Session = Depends(core.get_db)):
     ga_row = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
-    rows = [("استراتيجية المحتوى", "الهيكل جاهز", "ok"), ("قياس أداء الموقع", "GA4 متصل" if ga_row else "بانتظار أول قراءة GA4", "ok" if ga_row else "pending")]
+    utm_links = social_attribution.profile_utm_links()
+    rows = [("استراتيجية المحتوى", "الهيكل جاهز", "ok"), ("Instagram", "@pakgat.sa · الحساب الرسمي", "ok"), ("TikTok", "@pakgat.sa · الحساب الرسمي", "ok"), ("Snapchat", "@pakgat.sa · الحساب الرسمي", "ok"), ("قياس أداء الموقع", "GA4 متصل" if ga_row else "بانتظار أول قراءة GA4", "ok" if ga_row else "pending")]
     if ga_row:
         rows.extend([("جلسات الموقع · آخر 28 يومًا", f"{ga_row.sessions:,}", "ok"), ("المستخدمون النشطون", f"{ga_row.active_users:,}", "ok"), ("مشاهدات الصفحات", f"{ga_row.page_views:,}", "ok"), ("الأحداث الرئيسية", f"{ga_row.key_events:,}", "ok")])
-    rows.extend([("إسناد حملات السوشيال", "يحتاج روابط UTM وربط حسابات القنوات", "pending"), ("النشر التلقائي", "يحتاج ربط Meta / TikTok / Snap وموافقة", "pending")])
-    return simple_status_page(request, "السوشيال ميديا وتوليد الطلب", "GA4 متصل لقياس ما يحدث داخل الموقع. القياس المباشر لكل قناة والنشر ينتظران ربط حساباتها واستخدام UTM.", rows, [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])
+    rows.extend([("روابط UTM للملفات الشخصية", "جاهزة للمنصات الثلاث", "ok"), ("إسناد الحملات في GA4", "يبدأ عند استخدام روابط UTM", "ok"), ("النشر التلقائي", "يحتاج ربط APIs وموافقة", "pending")])
+    links = [("Instagram الرسمي", social_attribution.OFFICIAL_SOCIAL_ACCOUNTS[0]["url"]), ("TikTok الرسمي", social_attribution.OFFICIAL_SOCIAL_ACCOUNTS[1]["url"]), ("Snapchat الرسمي", social_attribution.OFFICIAL_SOCIAL_ACCOUNTS[2]["url"]), ("UTM · Instagram", utm_links["instagram"]), ("UTM · TikTok", utm_links["tiktok"]), ("UTM · Snapchat", utm_links["snapchat"]), ("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")]
+    return simple_status_page(request, "السوشيال ميديا وتوليد الطلب", "الحسابات الرسمية موحدة باسم @pakgat.sa، وGA4 متصل، وروابط UTM جاهزة لتمييز الزيارات القادمة من كل منصة.", rows, links)
 
 
 @core.app.get("/admin/company/brand", response_class=HTMLResponse)
