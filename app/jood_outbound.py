@@ -34,7 +34,26 @@ from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
 
 
-PAKGAT_OFFICIAL_WEBSITE = "https://pakgat.com/ar"
+PAKGAT_OFFICIAL_WEBSITE = "https://pakgat.com"
+
+
+def approved_merchant_outreach_message(contact) -> str:
+    activity_name = str(
+        getattr(contact, "business_name", "")
+        or getattr(contact, "display_name", "")
+        or "نشاطكم"
+    ).strip()
+    return (
+        "*مساكم الله بالخير ✨*\n\n"
+        f"*معكم جود من منصة بكجات — {PAKGAT_OFFICIAL_WEBSITE}*\n\n"
+        f"أعجبنا نشاط *{activity_name}*، ونشوف عندكم فرصة ممتازة لـ *استقطاب عملاء جدد في الرياض* "
+        "من خلال *كوبونات وعروض وبكجات مميزة*.\n\n"
+        "*بكجات منصة متخصصة في مدينة الرياض*، ونعمل على ربط الأنشطة المميزة بعملاء يبحثون عن عروض وتجارب تستحق التجربة.\n\n"
+        "التعاون معنا *بدون أي تكاليف مسبقة عليكم*، ونساعدكم في تجهيز العرض وإبرازه بشكل واضح وجذاب.\n\n"
+        "إذا ناسبكم نبدأ، ردوا برقم واحد فقط:\n\n"
+        "*1 — أرسلوا التفاصيل*\n"
+        "*2 — لدي استفسار*"
+    )
 
 
 def outbound_intent_for(mode: str) -> str:
@@ -78,7 +97,10 @@ def ensure_merchant_website_link(message: str, mode: str) -> str:
 
 def ensure_outbound_opening(message: str, mode: str, contact, featured_product=None) -> str:
     """Prevent a first-touch outreach from degrading into an inbound help greeting."""
-    if str(mode or "").strip().lower() == "customer" and featured_product is not None:
+    mode_key = str(mode or "").strip().lower()
+    if mode_key == "merchant":
+        return approved_merchant_outreach_message(contact)
+    if mode_key == "customer" and featured_product is not None:
         return strict_product_message(featured_product)
     clean = " ".join(str(message or "").strip().split())
     lowered = clean.lower()
@@ -89,23 +111,12 @@ def ensure_outbound_opening(message: str, mode: str, contact, featured_product=N
         and any(marker in clean for marker in outbound_markers)
         and not any(marker in lowered for marker in inbound_markers)
         and (
-            str(mode or "").strip().lower() == "merchant"
-            or featured_product is None
+            featured_product is None
             or featured_product.name in clean
         )
     ):
-        return ensure_merchant_website_link(clean, mode)
+        return clean
 
-    name = str(getattr(contact, "display_name", "") or "").strip()
-    business = str(getattr(contact, "business_name", "") or "").strip()
-    greeting = f"أهلًا {name}، " if name else "أهلًا، "
-    if str(mode or "").strip().lower() == "merchant":
-        target = f" لنشاط {business}" if business else ""
-        opening = (
-            f"{greeting}معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون{target} "
-            "تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة. هل يناسبك أرسل لك التفاصيل؟"
-        )
-        return ensure_merchant_website_link(opening, mode)
     return sales_opening_fallback(contact, featured_product)
 
 
