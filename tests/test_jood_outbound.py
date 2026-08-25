@@ -49,10 +49,13 @@ class JoodOutboundTests(unittest.TestCase):
         self.assertIn("عروض", result)
         self.assertNotIn("كيف أساعدك", result)
 
-    def test_clear_outbound_opening_is_preserved(self):
+    def test_clear_merchant_opening_is_preserved_and_gets_official_site(self):
         contact = SimpleNamespace(display_name="سارة", business_name="مركز سارة")
         message = "السلام عليكم أستاذة سارة، معك جود من باكيجات. أتواصل معك لعرض فرصة تعاون مناسبة لمركز سارة، هل يناسبك أرسل التفاصيل؟"
-        self.assertEqual(ensure_outbound_opening(message, "merchant", contact), message)
+        result = ensure_outbound_opening(message, "merchant", contact)
+        self.assertTrue(result.startswith(message))
+        self.assertIn("https://pakgat.com/ar", result)
+        self.assertEqual(result.count("https://pakgat.com/ar"), 1)
 
     def test_customer_opening_is_always_the_strict_catalog_template(self):
         contact = SimpleNamespace(display_name="بهاء", business_name=None)

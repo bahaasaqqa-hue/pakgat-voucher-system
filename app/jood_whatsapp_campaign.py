@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -40,6 +41,13 @@ from app.jood_catalog import (
 from app.jood_sales_playbook import featured_product_context
 
 
+RIYADH_TIMEZONE = ZoneInfo("Asia/Riyadh")
+CAMPAIGN_SEND_START_HOUR = 9
+CAMPAIGN_SEND_END_HOUR = 22
+CAMPAIGN_SEND_INTERVAL_SECONDS = 10 * 60
+_ACTIVE_CAMPAIGN_RUNNERS: set[int] = set()
+
+
 class JoodWhatsAppCampaign(core.Base):
     __tablename__ = "jood_whatsapp_campaigns"
 
@@ -71,6 +79,39 @@ class JoodWhatsAppDispatch(core.Base):
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
+
+
+def _as_riyadh_time(value: datetime | None = None) -> datetime:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(RIYADH_TIMEZONE)
+
+
+def campaign_send_window_open(value: datetime | None = None) -> bool:
+    local = _as_riyadh_time(value)
+    return CAMPAIGN_SEND_START_HOUR <= local.hour < CAMPAIGN_SEND_END_HOUR
+
+
+def campaign_seconds_until_send_window(value: datetime | None = None) -> int:
+    local = _as_riyadh_time(value)
+    if campaign_send_window_open(local):
+        return 0
+    if local.hour < CAMPAIGN_SEND_START_HOUR:
+        target = local.replace(
+            hour=CAMPAIGN_SEND_START_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    else:
+        target = (local + timedelta(days=1)).replace(
+            hour=CAMPAIGN_SEND_START_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return max(0, int((target - local).total_seconds()))
 
 
 def campaign_contact_allowed(contact, contact_type: str) -> bool:
@@ -289,30 +330,85 @@ async def _deliver_campaign_dispatch(
     db.commit()
 
 
+def _next_queued_dispatch(db: Session, campaign_id: int) -> JoodWhatsAppDispatch | None:
+    return db.scalar(
+        select(JoodWhatsAppDispatch)
+        .where(
+            JoodWhatsAppDispatch.campaign_id == campaign_id,
+            JoodWhatsAppDispatch.status == "queued",
+        )
+        .order_by(JoodWhatsAppDispatch.id.asc())
+        .limit(1)
+    )
+
+
 async def process_campaign_queue(campaign_id: int) -> None:
+    campaign_id = int(campaign_id)
+    if campaign_id in _ACTIVE_CAMPAIGN_RUNNERS:
+        return
+    _ACTIVE_CAMPAIGN_RUNNERS.add(campaign_id)
+    try:
+        while True:
+            delay = 0
+            now = datetime.now(timezone.utc)
+            with core.SessionLocal() as db:
+                campaign = db.get(JoodWhatsAppCampaign, campaign_id)
+                if not campaign or campaign.status not in {"active", "running", "scheduled"}:
+                    return
+
+                dispatch = _next_queued_dispatch(db, campaign.id)
+                if not dispatch:
+                    campaign.status = "completed"
+                    campaign.updated_at = now
+                    db.commit()
+                    return
+
+                if not campaign_send_window_open(now):
+                    campaign.status = "scheduled"
+                    campaign.updated_at = now
+                    db.commit()
+                    delay = campaign_seconds_until_send_window(now)
+                else:
+                    campaign.status = "running"
+                    campaign.updated_at = now
+                    db.commit()
+                    await _deliver_campaign_dispatch(db, campaign, dispatch)
+
+                    remaining = _next_queued_dispatch(db, campaign.id)
+                    campaign.updated_at = datetime.now(timezone.utc)
+                    if not remaining:
+                        campaign.status = "completed"
+                        db.commit()
+                        return
+                    campaign.status = "active"
+                    db.commit()
+                    delay = CAMPAIGN_SEND_INTERVAL_SECONDS
+
+            await asyncio.sleep(max(1, delay))
+    finally:
+        _ACTIVE_CAMPAIGN_RUNNERS.discard(campaign_id)
+
+
+@core.app.on_event("startup")
+async def resume_queued_whatsapp_campaigns() -> None:
     with core.SessionLocal() as db:
-        campaign = db.get(JoodWhatsAppCampaign, campaign_id)
-        if not campaign or campaign.status not in {"active", "running"}:
-            return
-        campaign.status = "running"
-        db.commit()
-        dispatches = list(
+        campaign_ids = list(
             db.scalars(
-                select(JoodWhatsAppDispatch)
+                select(JoodWhatsAppCampaign.id)
+                .join(
+                    JoodWhatsAppDispatch,
+                    JoodWhatsAppDispatch.campaign_id == JoodWhatsAppCampaign.id,
+                )
                 .where(
-                    JoodWhatsAppDispatch.campaign_id == campaign.id,
+                    JoodWhatsAppCampaign.status.in_(("active", "running", "scheduled")),
                     JoodWhatsAppDispatch.status == "queued",
                 )
-                .order_by(JoodWhatsAppDispatch.id.asc())
+                .distinct()
+                .order_by(JoodWhatsAppCampaign.id.asc())
             ).all()
         )
-        for index, dispatch in enumerate(dispatches):
-            await _deliver_campaign_dispatch(db, campaign, dispatch)
-            if index + 1 < len(dispatches):
-                await asyncio.sleep(1)
-        campaign.status = "completed"
-        campaign.updated_at = datetime.now(timezone.utc)
-        db.commit()
+    for campaign_id in campaign_ids:
+        asyncio.create_task(process_campaign_queue(int(campaign_id)))
 
 
 @core.app.post("/admin/company/jood/whatsapp-campaigns/upload")
