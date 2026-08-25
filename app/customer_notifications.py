@@ -67,7 +67,24 @@ def resolve_customer_response(
     sender_phone: str,
     text: str,
     contact_id: int,
+    *,
+    contact_type: str | None = None,
 ) -> CustomerResponseResult | None:
+    resolved_contact_type = str(contact_type or "").strip().lower()
+    if not resolved_contact_type:
+        from app.jood_company_ops import CompanyContact
+
+        resolved_contact_type = str(
+            db.scalar(
+                select(CompanyContact.contact_type)
+                .where(CompanyContact.id == contact_id)
+                .limit(1)
+            )
+            or ""
+        ).strip().lower()
+    if resolved_contact_type and resolved_contact_type != "customer":
+        return None
+
     value = str(text or "").strip()
     if value not in {"1", "2", "3", "4", "5"}:
         return None
