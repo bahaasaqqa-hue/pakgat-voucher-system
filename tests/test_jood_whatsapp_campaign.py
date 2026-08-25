@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
@@ -21,6 +22,10 @@ from app.jood_whatsapp_campaign import (
 
 
 RIYADH = ZoneInfo("Asia/Riyadh")
+
+
+class StopAfterFirstSleep(RuntimeError):
+    pass
 
 
 class JoodWhatsAppCampaignTests(unittest.TestCase):
@@ -127,6 +132,57 @@ class JoodWhatsAppCampaignTests(unittest.TestCase):
         )
         self.assertIn("https://pakgat.com/ar", message)
         self.assertEqual(message.count("https://pakgat.com/ar"), 1)
+
+    def test_process_queue_attempts_one_dispatch_then_waits_ten_minutes(self):
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        core.Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        with Session() as db:
+            contact_a = CompanyContact(phone="966501111111", contact_type="merchant", status="active")
+            contact_b = CompanyContact(phone="966502222222", contact_type="merchant", status="active")
+            campaign = JoodWhatsAppCampaign(name="تجار", contact_type="merchant", goal="", status="active")
+            db.add_all([contact_a, contact_b, campaign])
+            db.commit()
+            dispatch_a = JoodWhatsAppDispatch(campaign_id=campaign.id, contact_id=contact_a.id, message="", status="queued")
+            dispatch_b = JoodWhatsAppDispatch(campaign_id=campaign.id, contact_id=contact_b.id, message="", status="queued")
+            db.add_all([dispatch_a, dispatch_b])
+            db.commit()
+            campaign_id = campaign.id
+            first_dispatch_id = dispatch_a.id
+
+        attempted = []
+        sleeps = []
+
+        async def fake_deliver(db, campaign, dispatch):
+            attempted.append(dispatch.id)
+            dispatch.status = "sent"
+            db.commit()
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+            raise StopAfterFirstSleep()
+
+        original_session_local = core.SessionLocal
+        original_deliver = campaign_module._deliver_campaign_dispatch
+        original_sleep = campaign_module.asyncio.sleep
+        original_window = getattr(campaign_module, "campaign_send_window_open", None)
+        try:
+            core.SessionLocal = Session
+            campaign_module._deliver_campaign_dispatch = fake_deliver
+            campaign_module.asyncio.sleep = fake_sleep
+            if original_window is not None:
+                campaign_module.campaign_send_window_open = lambda _now=None: True
+            with self.assertRaises(StopAfterFirstSleep):
+                asyncio.run(campaign_module.process_campaign_queue(campaign_id))
+        finally:
+            core.SessionLocal = original_session_local
+            campaign_module._deliver_campaign_dispatch = original_deliver
+            campaign_module.asyncio.sleep = original_sleep
+            if original_window is not None:
+                campaign_module.campaign_send_window_open = original_window
+
+        self.assertEqual(attempted, [first_dispatch_id])
+        self.assertEqual(sleeps, [600])
 
 
 if __name__ == "__main__":
