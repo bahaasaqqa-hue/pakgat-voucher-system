@@ -130,8 +130,9 @@ class JoodWhatsAppCampaignTests(unittest.TestCase):
             "merchant",
             contact,
         )
-        self.assertIn("https://pakgat.com/ar", message)
-        self.assertEqual(message.count("https://pakgat.com/ar"), 1)
+        self.assertIn("https://pakgat.com", message)
+        self.assertEqual(message.count("https://pakgat.com"), 1)
+        self.assertNotIn("https://pakgat.com/ar", message)
 
     def test_process_queue_attempts_one_dispatch_then_waits_ten_minutes(self):
         engine = create_engine("sqlite+pysqlite:///:memory:")
