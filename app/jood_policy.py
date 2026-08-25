@@ -13,7 +13,10 @@ CAR_CARE_URL = (
 LEGACY_CAR_CARE_PATH = "/ar/categories/car-care"
 APPROVED_URLS = frozenset({PAKGAT_HOME_URL, CAR_CARE_URL})
 
-_URL_RE = re.compile(r"https?://[^\s<>\"'\]\[)]+", re.IGNORECASE)
+# Markdown emphasis markers are not part of a URL. Excluding `*` keeps
+# approved URLs such as `*https://pakgat.com*` from being misread as
+# `https://pakgat.com*` and replaced with the fallback home URL.
+_URL_RE = re.compile(r"https?://[^\s<>\"'\]\[)*]+", re.IGNORECASE)
 _LEGACY_ABSOLUTE_RE = re.compile(
     r"https?://(?:www\.)?pakgat\.com/ar/categories/car-care(?:[/?#][^\s<>\"']*)?",
     re.IGNORECASE,
