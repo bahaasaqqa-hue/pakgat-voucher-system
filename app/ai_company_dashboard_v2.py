@@ -26,7 +26,7 @@ from app.ai_company_growth import growth_metrics
 from app.ai_company_hunter import CompanyLead
 from app.ai_company_readiness import summarize_system_statuses
 from app.ai_company_store_ops import StoreOpsIssue
-from app.salla_data import SallaOrderSnapshot, SallaOrderItemSnapshot
+from app.salla_data import SallaOrderSnapshot, SallaOrderItemSnapshot, retention_metrics
 
 
 SAUDI_TZ = timezone(timedelta(hours=3))
@@ -158,12 +158,16 @@ def analytics_overview_rows(data: dict) -> list[tuple[str, str, str]]:
         ("إشعارات العملاء الفاشلة", f"{int(data.get('notifications_failed') or 0):,}", "ok" if not data.get("notifications_failed") else "pending"),
         ("تأكيدات استلام القسيمة", f"{int(data.get('delivery_confirmed') or 0):,}", "ok"),
         ("طلبات مساعدة العملاء", f"{int(data.get('help_requests') or 0):,}", "ok"),
-        ("العملاء العائدون / Retention", "يحتاج معرّف عميل من المصدر", "pending"),
+        ("العملاء الفريدون", f"{int(data.get('unique_customers') or 0):,}", "ok" if data.get("retention_coverage") else "pending"),
+        ("العملاء العائدون", f"{int(data.get('returning_customers') or 0):,}", "ok" if data.get("retention_coverage") else "pending"),
+        ("معدل العملاء العائدين", f"{float(data.get('repeat_customer_rate') or 0):.1f}%", "ok" if data.get("retention_coverage") else "pending"),
+        ("تغطية بيانات Retention", f"{float(data.get('retention_coverage') or 0):.1f}% من الطلبات المؤكدة", "ok" if data.get("retention_coverage") == 100 else "pending"),
     ]
 
 
 def analytics_overview_snapshot(db: Session) -> dict:
     growth = growth_metrics(db)
+    retention = retention_metrics(db)
     ga = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
     return {
         **growth,
@@ -178,6 +182,10 @@ def analytics_overview_snapshot(db: Session) -> dict:
         "notifications_failed": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.status == "failed"),
         "delivery_confirmed": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.response_value == "1"),
         "help_requests": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.response_value == "2"),
+        "unique_customers": retention["unique_customers"],
+        "returning_customers": retention["returning_customers"],
+        "repeat_customer_rate": retention["repeat_customer_rate"],
+        "retention_coverage": retention["coverage_percent"],
     }
 
 
@@ -481,7 +489,8 @@ def crm_page(request: Request, db: Session = Depends(core.get_db)):
     total = int(data["vouchers_total"] or 0)
     redeemed = int(data["vouchers_redeemed"] or 0)
     rate = redeemed / total * 100 if total else 0.0
-    return simple_status_page(request, "القسائم ودورة العميل", "مسار فعلي من إصدار القسيمة حتى الإرسال والتأكيد والاستخدام وطلب المساعدة.", [("القسائم الصادرة", f"{total:,}", "ok"), ("إشعارات القسيمة المرسلة", f"{data['notifications_sent']:,}", "ok"), ("أكد العميل الاستلام · رد 1", f"{data['delivery_confirmed']:,}", "ok"), ("طلب مساعدة · رد 2", f"{data['help_requests']:,}", "ok"), ("القسائم المستخدمة", f"{redeemed:,}", "ok"), ("نسبة الاستخدام", f"{rate:.1f}%", "ok"), ("إشعارات فاشلة", f"{data['notifications_failed']:,}", "ok" if not data['notifications_failed'] else "pending"), ("Repeat Customer / Retention", "يحتاج معرّف عميل من Salla", "pending")], [("تفاصيل سلة", "/admin/company/salla"), ("التحليلات الشاملة", "/admin/company/analytics")])
+    retention_ready = bool(data["retention_coverage"])
+    return simple_status_page(request, "القسائم ودورة العميل", "مسار فعلي من إصدار القسيمة حتى الإرسال والتأكيد والاستخدام والعودة للشراء.", [("القسائم الصادرة", f"{total:,}", "ok"), ("إشعارات القسيمة المرسلة", f"{data['notifications_sent']:,}", "ok"), ("أكد العميل الاستلام · رد 1", f"{data['delivery_confirmed']:,}", "ok"), ("طلب مساعدة · رد 2", f"{data['help_requests']:,}", "ok"), ("القسائم المستخدمة", f"{redeemed:,}", "ok"), ("نسبة الاستخدام", f"{rate:.1f}%", "ok"), ("العملاء الفريدون", f"{data['unique_customers']:,}", "ok" if retention_ready else "pending"), ("العملاء العائدون", f"{data['returning_customers']:,}", "ok" if retention_ready else "pending"), ("معدل العملاء العائدين", f"{data['repeat_customer_rate']:.1f}%", "ok" if retention_ready else "pending"), ("تغطية بيانات Retention", f"{data['retention_coverage']:.1f}%", "ok" if data['retention_coverage'] == 100 else "pending"), ("إشعارات فاشلة", f"{data['notifications_failed']:,}", "ok" if not data['notifications_failed'] else "pending")], [("تفاصيل سلة", "/admin/company/salla"), ("التحليلات الشاملة", "/admin/company/analytics")])
 
 
 @core.app.get("/admin/company/technology", response_class=HTMLResponse)

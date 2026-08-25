@@ -7,13 +7,15 @@ No customer PII and no raw payloads are persisted.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, Request
 from fastapi.routing import APIRoute
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, and_, delete, func, or_, select
+from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, and_, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
@@ -33,6 +35,7 @@ class SallaOrderSnapshot(core.Base):
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
     items_count: Mapped[int] = mapped_column(Integer, default=0)
     salla_created_at: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    customer_ref_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
@@ -81,6 +84,41 @@ def _text(data: dict, *paths: str) -> str:
     return str(value or "").strip()
 
 
+def extract_salla_customer_id(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    order = data.get("order") if isinstance(data.get("order"), dict) else {}
+    customer = data.get("customer") if isinstance(data.get("customer"), dict) else {}
+    order_customer = order.get("customer") if isinstance(order.get("customer"), dict) else {}
+    value = (
+        customer.get("id")
+        or data.get("customer_id")
+        or order_customer.get("id")
+        or order.get("customer_id")
+    )
+    return str(value or "").strip()
+
+
+def customer_reference_hash(customer_id: str, secret: str | None = None) -> str:
+    clean = str(customer_id or "").strip()
+    if not clean:
+        return ""
+    key = str(secret or core.ADMIN_SECRET).encode("utf-8")
+    return hmac.new(key, f"pakgat:retention:v1:{clean}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def ensure_salla_retention_schema() -> None:
+    inspector = inspect(core.engine)
+    if "salla_order_snapshots" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("salla_order_snapshots")}
+    with core.engine.begin() as connection:
+        if "customer_ref_hash" not in columns:
+            connection.execute(text("ALTER TABLE salla_order_snapshots ADD COLUMN customer_ref_hash VARCHAR(64)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_salla_order_snapshots_customer_ref_hash ON salla_order_snapshots (customer_ref_hash)"))
+
+
 def _capture_order_payload(db: Session, payload: dict) -> None:
     event = str(payload.get("event") or "").strip()
     if not event.startswith("order."):
@@ -93,6 +131,8 @@ def _capture_order_payload(db: Session, payload: dict) -> None:
     order_id = _text(data, "id", "order.id", "reference_id", "order.reference_id")
     if not order_id:
         return
+    customer_id = extract_salla_customer_id(data)
+    customer_ref_hash = customer_reference_hash(customer_id) if customer_id else None
 
     reference_id = _text(data, "reference_id", "order.reference_id") or None
     order_status = _text(
@@ -158,12 +198,14 @@ def _capture_order_payload(db: Session, payload: dict) -> None:
             paid_amount=paid_amount,
             items_count=len(items),
             salla_created_at=str(payload.get("created_at") or data.get("created_at") or "")[:120] or None,
+            customer_ref_hash=customer_ref_hash,
             first_seen_at=now,
             updated_at=now,
         )
         db.add(row)
     else:
         row.reference_id = reference_id or row.reference_id
+        row.customer_ref_hash = customer_ref_hash or row.customer_ref_hash
         row.last_event = event
         row.order_status = order_status or row.order_status
         row.payment_status = payment_status or row.payment_status
@@ -286,6 +328,52 @@ def salla_metrics(db: Session) -> dict:
         "products": products,
         "units": units,
     }
+
+
+def retention_metrics(db: Session) -> dict:
+    paid_statuses = ["paid", "completed", "success", "successful", "تم الدفع", "مدفوع"]
+    final_statuses = ["closed", "completed", "fulfilled", "مكتمل", "مغلق", "تم التنفيذ"]
+    confirmed = or_(
+        SallaOrderSnapshot.payment_status.in_(paid_statuses),
+        SallaOrderSnapshot.order_status.in_(final_statuses),
+        and_(SallaOrderSnapshot.total_amount > 0, SallaOrderSnapshot.paid_amount >= SallaOrderSnapshot.total_amount),
+    )
+    total_confirmed = int(db.scalar(select(func.count(SallaOrderSnapshot.id)).where(confirmed)) or 0)
+    identified = int(db.scalar(select(func.count(SallaOrderSnapshot.id)).where(confirmed, SallaOrderSnapshot.customer_ref_hash.is_not(None))) or 0)
+    grouped = select(
+        SallaOrderSnapshot.customer_ref_hash.label("customer_ref"),
+        func.count(SallaOrderSnapshot.id).label("order_count"),
+    ).where(confirmed, SallaOrderSnapshot.customer_ref_hash.is_not(None)).group_by(SallaOrderSnapshot.customer_ref_hash).subquery()
+    unique_customers = int(db.scalar(select(func.count()).select_from(grouped)) or 0)
+    returning_customers = int(db.scalar(select(func.count()).select_from(grouped).where(grouped.c.order_count > 1)) or 0)
+    repeat_orders = int(db.scalar(select(func.coalesce(func.sum(grouped.c.order_count - 1), 0)).where(grouped.c.order_count > 1)) or 0)
+    return {
+        "confirmed_orders": total_confirmed,
+        "identified_confirmed_orders": identified,
+        "unique_customers": unique_customers,
+        "returning_customers": returning_customers,
+        "repeat_orders": repeat_orders,
+        "repeat_customer_rate": round((returning_customers / unique_customers * 100) if unique_customers else 0.0, 1),
+        "coverage_percent": round((identified / total_confirmed * 100) if total_confirmed else 0.0, 1),
+    }
+
+
+def backfill_retention_customer_refs(db: Session) -> dict:
+    rows = list(db.scalars(select(SallaOrderSnapshot).where(SallaOrderSnapshot.customer_ref_hash.is_(None)).order_by(SallaOrderSnapshot.id)).all())
+    updated = failed = missing = 0
+    for row in rows:
+        result, error = core.fetch_salla_json_endpoint(db, "/orders/" + quote(row.order_id, safe=""))
+        if error:
+            failed += 1
+            continue
+        customer_id = extract_salla_customer_id(result)
+        if not customer_id:
+            missing += 1
+            continue
+        row.customer_ref_hash = customer_reference_hash(customer_id)
+        updated += 1
+    db.commit()
+    return {"examined": len(rows), "updated": updated, "missing_customer_id": missing, "failed": failed}
 
 
 def latest_orders(db: Session, limit: int = 20):

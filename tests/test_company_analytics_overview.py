@@ -38,7 +38,7 @@ class CompanyAnalyticsOverviewTests(unittest.TestCase):
         rows = analytics_overview_rows({"ga_sessions": None})
         rendered = " ".join(value for _, value, _ in rows)
         self.assertIn("بانتظار أول قراءة GA4", rendered)
-        self.assertIn("يحتاج معرّف عميل من المصدر", rendered)
+        self.assertIn("0.0% من الطلبات المؤكدة", rendered)
 
     def test_company_copy_no_longer_claims_connected_sources_are_waiting(self):
         source = Path("app/ai_company_dashboard_v2.py").read_text(encoding="utf-8")

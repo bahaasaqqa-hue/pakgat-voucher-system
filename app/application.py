@@ -215,8 +215,10 @@ def generate_verification_token() -> str:
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     from app.jood_whatsapp_context import ensure_jood_whatsapp_context_schema
+    from app.salla_data import ensure_salla_retention_schema
 
     ensure_jood_whatsapp_context_schema()
+    ensure_salla_retention_schema()
     # Populate the audit table for vouchers created before audit logging was added.
     # The operation is idempotent, so every deployment can run it safely.
     with SessionLocal() as db:
