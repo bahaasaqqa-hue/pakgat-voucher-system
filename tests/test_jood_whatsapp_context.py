@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import application as core
+import app.jood_whatsapp_context as whatsapp_context
 from app.jood_whatsapp_context import (
     active_outreach_context,
     inbound_outreach_context,
@@ -72,6 +73,54 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         self.assertEqual(row.state_json["collected_info"]["interest"], "car_care")
         self.assertEqual(row.state_json["presented_options"], options)
         self.assertEqual(row.state_json["selected_product_id"], "11")
+
+    def test_campaign_choice_one_returns_approved_sales_handoff_action(self):
+        row = remember_outreach_context(
+            self.db,
+            7,
+            "merchant",
+            "استقطاب التاجر إلى بكجات",
+            "campaign",
+        )
+        resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
+        self.assertIsNotNone(resolver, "merchant campaign choice resolver is missing")
+
+        action = resolver("1", "merchant", row)
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.handoff_kind, "merchant_partnership")
+        self.assertEqual(action.next_stage, "handed_off")
+        self.assertIn("*أبشروا بالسعد 🙌*", action.reply)
+        self.assertIn("*حملة تسويق ومبيعات متكاملة*", action.reply)
+        self.assertIn("*بدون أي رسوم أو تكاليف مسبقة*", action.reply)
+        self.assertIn("قسيمة رقمية (QR)", action.reply)
+        self.assertIn("تمسحونها بجوالكم خلال ثوانٍ", action.reply)
+        self.assertIn("*مسؤول الشراكات في بكجات*", action.reply)
+        self.assertIn("بعقد رسمي وموثق يحفظ حقوق الجميع", action.reply)
+        self.assertNotIn("أرسلوا لنا", action.reply)
+
+    def test_campaign_choice_action_does_not_hijack_question_or_inbound_merchant(self):
+        resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
+        self.assertIsNotNone(resolver, "merchant campaign choice resolver is missing")
+
+        campaign_row = remember_outreach_context(
+            self.db,
+            7,
+            "merchant",
+            "استقطاب التاجر إلى بكجات",
+            "campaign",
+        )
+        self.assertIsNone(resolver("2", "merchant", campaign_row))
+
+        inbound_row = remember_outreach_context(
+            self.db,
+            8,
+            "merchant",
+            "محادثة فردية",
+            "individual",
+        )
+        self.assertIsNone(resolver("1", "merchant", inbound_row))
+        self.assertIsNone(resolver("1", "customer", campaign_row))
 
 
 if __name__ == "__main__":
