@@ -1,11 +1,15 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app import application as core
 from app.jood_company_ops import CompanyContact
+from app import jood_whatsapp_campaign as campaign_module
+from app.jood_outbound import ensure_outbound_opening
 from app.jood_whatsapp_campaign import (
     JoodWhatsAppCampaign,
     JoodWhatsAppDispatch,
@@ -14,6 +18,9 @@ from app.jood_whatsapp_campaign import (
     mark_latest_dispatch_replied,
     requeue_failed_dispatches,
 )
+
+
+RIYADH = ZoneInfo("Asia/Riyadh")
 
 
 class JoodWhatsAppCampaignTests(unittest.TestCase):
@@ -90,6 +97,36 @@ class JoodWhatsAppCampaignTests(unittest.TestCase):
             self.assertEqual(failed.status, "queued")
             self.assertEqual(sent.status, "sent")
             self.assertEqual(campaign.status, "active")
+
+    def test_campaign_send_interval_is_ten_minutes(self):
+        self.assertEqual(
+            getattr(campaign_module, "CAMPAIGN_SEND_INTERVAL_SECONDS", None),
+            600,
+        )
+
+    def test_campaign_send_window_is_09_to_22_riyadh(self):
+        predicate = getattr(campaign_module, "campaign_send_window_open", None)
+        self.assertTrue(callable(predicate), "campaign_send_window_open must exist")
+        self.assertFalse(predicate(datetime(2026, 8, 25, 8, 59, tzinfo=RIYADH)))
+        self.assertTrue(predicate(datetime(2026, 8, 25, 9, 0, tzinfo=RIYADH)))
+        self.assertTrue(predicate(datetime(2026, 8, 25, 21, 59, 59, tzinfo=RIYADH)))
+        self.assertFalse(predicate(datetime(2026, 8, 25, 22, 0, tzinfo=RIYADH)))
+
+    def test_campaign_wait_until_next_window_uses_riyadh_time(self):
+        waiter = getattr(campaign_module, "campaign_seconds_until_send_window", None)
+        self.assertTrue(callable(waiter), "campaign_seconds_until_send_window must exist")
+        self.assertEqual(waiter(datetime(2026, 8, 25, 8, 50, tzinfo=RIYADH)), 600)
+        self.assertEqual(waiter(datetime(2026, 8, 25, 22, 0, tzinfo=RIYADH)), 39600)
+
+    def test_merchant_first_touch_always_includes_official_site(self):
+        contact = SimpleNamespace(display_name="صالون اختبار", business_name="سبا")
+        message = ensure_outbound_opening(
+            "أهلًا صالون اختبار، معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون لنشاط سبا تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة.",
+            "merchant",
+            contact,
+        )
+        self.assertIn("https://pakgat.com/ar", message)
+        self.assertEqual(message.count("https://pakgat.com/ar"), 1)
 
 
 if __name__ == "__main__":
