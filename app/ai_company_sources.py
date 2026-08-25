@@ -82,6 +82,10 @@ def refresh_source_inventory(db: Session) -> None:
             from app.google_analytics import google_analytics_connection_state
 
             status, detail = google_analytics_connection_state(db)
+        elif source == "Google Search Console":
+            from app.google_search_console import connection_state
+
+            status, detail = connection_state(db)
         elif source == "GitHub":
             detail = "Source control / deployment history"
         elif source == "Google Compute Engine":

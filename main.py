@@ -6,6 +6,8 @@ from app import salla_data as _salla_data  # noqa: F401 - captures signed Salla 
 from app import ai_company_salla as _ai_company_salla  # noqa: F401 - adds Salla view to Control Center
 from app import ai_company_growth as _ai_company_growth  # noqa: F401 - adds Sales/Growth/Product Intelligence
 from app import google_analytics as _google_analytics  # noqa: F401 - GA4 read-only Data Hub snapshots
+from app import google_search_console as _google_search_console  # noqa: F401 - Search Console read-only snapshots
+from app import security_watch as _security_watch  # noqa: F401 - evidence-based security posture
 from app import ai_company_sources as _ai_company_sources  # noqa: F401 - source inventory/status view
 from app import ai_company_dispatch as _ai_company_dispatch  # noqa: F401 - manual opportunity assignment + WhatsLoop dispatch
 from app import ai_company_agent_reporting as _ai_company_agent_reporting  # noqa: F401 - secure external agent reports + evidence

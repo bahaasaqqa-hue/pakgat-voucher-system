@@ -21,6 +21,8 @@ from app import application as core
 from app import ai_company
 from app import ai_company_sources
 from app import google_analytics
+from app import google_search_console
+from app import security_watch
 from app.ai_company_governance import CompanyApproval, generate_ceo_brief
 from app.ai_company_growth import growth_metrics
 from app.ai_company_hunter import CompanyLead
@@ -62,7 +64,7 @@ SYSTEM_CARDS = [
     ("07", "عمليات المتجر", "يعمل", "/admin/company/store-ops", "Salla OAuth والويبهوكس متصلان؛ مشاكل العرض والكتالوج تُرصد من البيانات المتاحة."),
     ("08", "SEO وGoogle", "يعمل جزئيًا", "/admin/company/seo", "GA4 متصل فعليًا؛ Google Search Console بانتظار الربط."),
     ("09", "البراند والاستوديو الإبداعي", "هيكل جاهز", "/admin/company/brand", "الهوية، صور المنتجات، البنرات والأصول الإبداعية."),
-    ("10", "السوشيال وتوليد الطلب", "هيكل جاهز", "/admin/company/social", "المحتوى والحملات وربط الأداء بالمبيعات بعد ربط مصادره."),
+    ("10", "السوشيال وتوليد الطلب", "يعمل جزئيًا", "/admin/company/social", "GA4 يقيس أداء الموقع؛ إسناد الحملات يحتاج UTM وربط حسابات القنوات."),
     ("11", "القسائم ودورة العميل", "يعمل جزئيًا", "/admin/company/crm", "Voucher + QR + WhatsApp تعمل؛ Retention وRepeat Customer قيد الاستكمال."),
     ("12", "التقنية والأمان", "يعمل جزئيًا", "/admin/company/technology", "Google VM، PostgreSQL، المراقبة والنسخ الاحتياطي؛ Security Watch يتوسع تدريجيًا."),
 ]
@@ -470,12 +472,32 @@ def seo_page(request: Request, db: Session = Depends(core.get_db)):
     sc = _source_state(db, "Google Search Console")
     ga = _source_state(db, "Google Analytics")
     ga_row = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
-    return simple_status_page(request, "SEO وGoogle", "GA4 متصل لقياس الزيارات والسلوك. الكلمات والظهور وCTR والفهرسة تحتاج Google Search Console.", [("Google Analytics", _status_ar(ga), "ok" if ga != "Needs Integration" else "pending"), ("جلسات GA4 · آخر 28 يومًا", f"{ga_row.sessions:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending"), ("مشاهدات الصفحات", f"{ga_row.page_views:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending"), ("Google Search Console", _status_ar(sc), "ok" if sc != "Needs Integration" else "pending"), ("الكلمات · الظهور · CTR · الفهرسة", "تظهر بعد ربط Search Console", "pending")], [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])
+    search_error = ""
+    search_row = google_search_console.latest_snapshot(db, google_search_console.SITE_URL)
+    try:
+        search_row = google_search_console.refresh_if_stale(db, google_search_console.SITE_URL)
+    except google_search_console.SearchConsoleSyncError as exc:
+        search_error = str(exc)
+    rows = [("Google Analytics", _status_ar(ga), "ok" if ga != "Needs Integration" else "pending"), ("جلسات GA4 · آخر 28 يومًا", f"{ga_row.sessions:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending"), ("مشاهدات الصفحات", f"{ga_row.page_views:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending")]
+    if search_row:
+        rows.extend([("Google Search Console", "متصل · قراءة فقط", "ok"), ("النقرات العضوية · آخر 28 يومًا", f"{search_row.clicks:,}", "ok"), ("مرات الظهور", f"{search_row.impressions:,}", "ok"), ("CTR", f"{search_row.ctr * 100:.2f}%", "ok"), ("متوسط الترتيب", f"{search_row.position:.2f}", "ok")])
+        for item in __import__("json").loads(search_row.top_queries_json or "[]")[:5]:
+            rows.append(("كلمة بحث · " + str(item.get("value") or "")[:70], f"{item.get('clicks', 0):,} نقرة · {item.get('impressions', 0):,} ظهور", "ok"))
+        for item in __import__("json").loads(search_row.top_pages_json or "[]")[:5]:
+            rows.append(("صفحة عضوية · " + str(item.get("value") or "")[:70], f"{item.get('clicks', 0):,} نقرة · {item.get('impressions', 0):,} ظهور", "ok"))
+    else:
+        rows.extend([("Google Search Console", _status_ar(sc), "pending"), ("حالة القراءة", search_error or "بانتظار منح حساب الخدمة صلاحية قراءة", "pending"), ("الكلمات · الظهور · CTR · الفهرسة", "تظهر بعد أول مزامنة ناجحة", "pending")])
+    return simple_status_page(request, "SEO وGoogle", "GA4 يقيس الزيارات والسلوك، وSearch Console يقيس البحث العضوي دون أرقام تقديرية.", rows, [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])
 
 
 @core.app.get("/admin/company/social", response_class=HTMLResponse)
-def social_page(request: Request):
-    return simple_status_page(request, "السوشيال ميديا وتوليد الطلب", "القسم مخصص لاختيار العروض المناسبة، تجهيز Concepts/Captions/Reels/Stories وربط الأداء بالمتجر. لن نعتبره مفعّلًا قبل ربط قنوات القياس والنشر.", [("استراتيجية المحتوى", "الهيكل جاهز", "ok"), ("قياس الأداء", "بانتظار Analytics والقنوات", "pending"), ("النشر التلقائي", "يحتاج موافقة وربط", "pending")], [("ما هي شركة بكجات الذكية؟", "/admin/company/about")])
+def social_page(request: Request, db: Session = Depends(core.get_db)):
+    ga_row = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
+    rows = [("استراتيجية المحتوى", "الهيكل جاهز", "ok"), ("قياس أداء الموقع", "GA4 متصل" if ga_row else "بانتظار أول قراءة GA4", "ok" if ga_row else "pending")]
+    if ga_row:
+        rows.extend([("جلسات الموقع · آخر 28 يومًا", f"{ga_row.sessions:,}", "ok"), ("المستخدمون النشطون", f"{ga_row.active_users:,}", "ok"), ("مشاهدات الصفحات", f"{ga_row.page_views:,}", "ok"), ("الأحداث الرئيسية", f"{ga_row.key_events:,}", "ok")])
+    rows.extend([("إسناد حملات السوشيال", "يحتاج روابط UTM وربط حسابات القنوات", "pending"), ("النشر التلقائي", "يحتاج ربط Meta / TikTok / Snap وموافقة", "pending")])
+    return simple_status_page(request, "السوشيال ميديا وتوليد الطلب", "GA4 متصل لقياس ما يحدث داخل الموقع. القياس المباشر لكل قناة والنشر ينتظران ربط حساباتها واستخدام UTM.", rows, [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])
 
 
 @core.app.get("/admin/company/brand", response_class=HTMLResponse)
@@ -499,7 +521,8 @@ def technology_page(request: Request, db: Session = Depends(core.get_db)):
     oauth = _source_state(db, "Salla OAuth / Merchant API")
     whats = _source_state(db, "WhatsLoop")
     ga = _source_state(db, "Google Analytics")
-    return simple_status_page(request, "التقنية والأمان", "الحالة الفعلية للبنية والتكاملات المتصلة حاليًا.", [("Google Compute Engine", "يعمل", "ok"), ("PostgreSQL Data Hub", "يعمل", "ok"), ("Salla OAuth / Merchant API", _status_ar(oauth), "ok" if oauth == "Connected" else "pending"), ("Salla Webhooks", _status_ar(salla), "ok" if salla == "Connected" else "pending"), ("WhatsLoop", _status_ar(whats), "ok" if whats == "Connected" else "pending"), ("Google Analytics", _status_ar(ga), "ok" if ga == "Connected" else "pending"), ("نسخ PostgreSQL اليومية", "مُجهّزة في النشر", "ok"), ("Security Watch المتقدم", "قيد الاستكمال", "pending")], [("مصادر البيانات", "/admin/company/sources")])
+    integration_rows = [("Google Compute Engine", "يعمل", "ok"), ("PostgreSQL Data Hub", "يعمل", "ok"), ("Salla OAuth / Merchant API", _status_ar(oauth), "ok" if oauth == "Connected" else "pending"), ("Salla Webhooks", _status_ar(salla), "ok" if salla == "Connected" else "pending"), ("WhatsLoop", _status_ar(whats), "ok" if whats == "Connected" else "pending"), ("Google Analytics", _status_ar(ga), "ok" if ga == "Connected" else "pending")]
+    return simple_status_page(request, "التقنية والأمان", "Security Watch قراءة فقط: يعرض أدلة التشغيل والحماية والفشل المسجل دون كشف الأسرار.", integration_rows + security_watch.security_watch_rows(db), [("مصادر البيانات", "/admin/company/sources")])
 
 
 # Replace the two legacy entry pages with the approved V2 experience.

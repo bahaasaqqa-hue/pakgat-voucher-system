@@ -14,10 +14,12 @@ from app import application as core
 class GoogleAnalyticsTests(unittest.TestCase):
     def setUp(self):
         from app import google_analytics as ga
+        from app import google_search_console as gsc
 
         self.ga = ga
         self.engine = create_engine("sqlite:///:memory:")
         ga.GoogleAnalyticsSnapshot.__table__.create(self.engine)
+        gsc.SearchConsoleSnapshot.__table__.create(self.engine)
         self.db = Session(self.engine)
 
     def tearDown(self):

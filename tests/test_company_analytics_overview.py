@@ -45,6 +45,13 @@ class CompanyAnalyticsOverviewTests(unittest.TestCase):
         self.assertNotIn("Google ينتظر الربط", source)
         self.assertNotIn("Search Console وGA4 غير مربوطين بعد", source)
         self.assertNotIn("القراءة الكاملة تنتظر Salla OAuth", source)
+        self.assertNotIn("قياس الأداء\", \"بانتظار Analytics والقنوات", source)
+
+    def test_social_page_uses_real_ga4_metrics(self):
+        source = Path("app/ai_company_dashboard_v2.py").read_text(encoding="utf-8")
+        self.assertIn("جلسات الموقع · آخر 28 يومًا", source)
+        self.assertIn("إسناد حملات السوشيال", source)
+        self.assertIn("روابط UTM وربط حسابات القنوات", source)
 
 
 if __name__ == "__main__":
