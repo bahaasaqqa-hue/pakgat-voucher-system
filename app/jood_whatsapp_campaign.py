@@ -45,7 +45,27 @@ RIYADH_TIMEZONE = ZoneInfo("Asia/Riyadh")
 CAMPAIGN_SEND_START_HOUR = 9
 CAMPAIGN_SEND_END_HOUR = 22
 CAMPAIGN_SEND_INTERVAL_SECONDS = 10 * 60
+PAKGAT_MERCHANT_CAMPAIGN_SITE = "https://pakgat.com"
 _ACTIVE_CAMPAIGN_RUNNERS: set[int] = set()
+
+
+def approved_merchant_campaign_message(contact) -> str:
+    activity_name = str(
+        getattr(contact, "display_name", "")
+        or getattr(contact, "business_name", "")
+        or "نشاطكم"
+    ).strip()
+    return (
+        "*مساكم الله بالخير ✨*\n\n"
+        f"*معكم جود من منصة بكجات — {PAKGAT_MERCHANT_CAMPAIGN_SITE}*\n\n"
+        f"أعجبنا نشاط *{activity_name}*، ونشوف عندكم فرصة ممتازة لـ *استقطاب عملاء جدد في الرياض* "
+        "من خلال *كوبونات وعروض وبكجات مميزة*.\n\n"
+        "*بكجات منصة متخصصة في مدينة الرياض*، ونعمل على ربط الأنشطة المميزة بعملاء يبحثون عن عروض وتجارب تستحق التجربة.\n\n"
+        "التعاون معنا *بدون أي تكاليف مسبقة عليكم*، ونساعدكم في تجهيز العرض وإبرازه بشكل واضح وجذاب.\n\n"
+        "إذا ناسبكم نبدأ، ردوا برقم واحد فقط:\n\n"
+        "*1 — أرسلوا التفاصيل*\n"
+        "*2 — لدي استفسار*"
+    )
 
 
 class JoodWhatsAppCampaign(core.Base):
@@ -278,6 +298,8 @@ async def _deliver_campaign_dispatch(
             if featured is None:
                 raise RuntimeError("No approved Salla product is currently available")
             generated = strict_product_message(featured)
+        elif mode == "merchant":
+            generated = approved_merchant_campaign_message(contact)
         else:
             generated = await asyncio.to_thread(
                 generate_jood_reply,
@@ -288,9 +310,13 @@ async def _deliver_campaign_dispatch(
                 trusted,
             )
         approved_urls = {item.url for item in catalog}
-        message = ensure_outbound_opening(
-            sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
-        )
+        if mode == "merchant":
+            approved_urls.add(PAKGAT_MERCHANT_CAMPAIGN_SITE)
+            message = sanitize_jood_reply(generated, approved_urls=approved_urls)
+        else:
+            message = ensure_outbound_opening(
+                sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
+            )
         ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
         if not ok:
             raise RuntimeError(provider)
@@ -566,6 +592,8 @@ async def send_next_whatsapp_campaign_contact(
             if featured is None:
                 raise JoodAIError("No approved Salla product is currently available")
             generated = strict_product_message(featured)
+        elif mode == "merchant":
+            generated = approved_merchant_campaign_message(contact)
         else:
             generated = await asyncio.to_thread(
                 generate_jood_reply,
@@ -584,9 +612,13 @@ async def send_next_whatsapp_campaign_contact(
         raise HTTPException(status_code=502, detail="Jood AI generation failed") from exc
 
     approved_urls = {item.url for item in catalog}
-    message = ensure_outbound_opening(
-        sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
-    )
+    if mode == "merchant":
+        approved_urls.add(PAKGAT_MERCHANT_CAMPAIGN_SITE)
+        message = sanitize_jood_reply(generated, approved_urls=approved_urls)
+    else:
+        message = ensure_outbound_opening(
+            sanitize_jood_reply(generated, approved_urls=approved_urls), mode, contact, featured
+        )
     ok, provider = await asyncio.to_thread(_send_whatsloop_text, contact.phone, message)
     if not ok:
         core.log_event(
