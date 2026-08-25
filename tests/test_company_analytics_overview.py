@@ -53,6 +53,9 @@ class CompanyAnalyticsOverviewTests(unittest.TestCase):
         self.assertIn("إسناد الحملات في GA4", source)
         self.assertIn("روابط UTM للملفات الشخصية", source)
         self.assertIn("جاهزة للمنصات الثلاث", source)
+        self.assertIn("Meta Business وصفحة Facebook", source)
+        self.assertIn("مرتبطان · تأكيد المالك", source)
+        self.assertIn("Meta API للنشر وبيانات الإعلانات", source)
 
 
 if __name__ == "__main__":
