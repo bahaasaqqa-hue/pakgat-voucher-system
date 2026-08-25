@@ -157,8 +157,6 @@ def merchant_campaign_choice_action(
 ) -> MerchantCampaignChoiceAction | None:
     if str(mode or "").strip().lower() != "merchant" or context_row is None:
         return None
-    if str(context_row.source or "").strip().lower() != "campaign":
-        return None
 
     state = dict(context_row.state_json or {})
     if state.get("direction") != "outbound" or state.get("persona") != "outbound_merchant_acquisition":
