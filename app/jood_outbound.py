@@ -136,7 +136,7 @@ def _send_whatsloop_text(phone: str, message: str) -> tuple[bool, str]:
         f"{core.WHATSLOOP_API_BASE_URL}/messages/send-text",
         data=body,
         headers={
-            "Authorization": f"Bearer {core.WHATSLOOP_API_TOKEN",
+            "Authorization": f"Bearer {core.WHATSLOOP_API_TOKEN}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
