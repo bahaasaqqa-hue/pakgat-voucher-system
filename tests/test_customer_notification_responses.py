@@ -59,6 +59,19 @@ class CustomerNotificationResponseTests(unittest.TestCase):
         self.assertIsNone(resolve_customer_response(self.db, "966500000000", "2", self.contact.id))
         self.assertEqual(len(self.db.scalars(select(JoodHandoff)).all()), 1)
 
+    def test_merchant_numeric_reply_is_not_consumed_by_customer_notification_prompt(self):
+        prompt = self._prompt("voucher_issued")
+        result = resolve_customer_response(
+            self.db,
+            "966500000000",
+            "1",
+            self.contact.id,
+            contact_type="merchant",
+        )
+        self.assertIsNone(result)
+        self.db.refresh(prompt)
+        self.assertIsNone(prompt.response_value)
+
     def test_latest_redemption_prompt_takes_precedence_for_rating(self):
         self._prompt("voucher_issued")
         rating = core.ensure_customer_notification(self.db, self.voucher, "voucher_redeemed", "message")
