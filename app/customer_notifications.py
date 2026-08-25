@@ -67,7 +67,11 @@ def resolve_customer_response(
     sender_phone: str,
     text: str,
     contact_id: int,
+    *,
+    contact_type: str = "customer",
 ) -> CustomerResponseResult | None:
+    if str(contact_type or "").strip().lower() != "customer":
+        return None
     value = str(text or "").strip()
     if value not in {"1", "2", "3", "4", "5"}:
         return None
