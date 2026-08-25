@@ -11,6 +11,22 @@ from app.jood_outbound import (
 from app.jood_catalog import CatalogItem, strict_product_message
 
 
+APPROVED_MERCHANT_MESSAGE = """*مساكم الله بالخير ✨*
+
+*معكم جود من منصة بكجات — https://pakgat.com*
+
+أعجبنا نشاط *Anwar car rental*، ونشوف عندكم فرصة ممتازة لـ *استقطاب عملاء جدد في الرياض* من خلال *كوبونات وعروض وبكجات مميزة*.
+
+*بكجات منصة متخصصة في مدينة الرياض*، ونعمل على ربط الأنشطة المميزة بعملاء يبحثون عن عروض وتجارب تستحق التجربة.
+
+التعاون معنا *بدون أي تكاليف مسبقة عليكم*، ونساعدكم في تجهيز العرض وإبرازه بشكل واضح وجذاب.
+
+إذا ناسبكم نبدأ، ردوا برقم واحد فقط:
+
+*1 — أرسلوا التفاصيل*
+*2 — لدي استفسار*"""
+
+
 class JoodOutboundTests(unittest.TestCase):
     def test_customer_outbound_uses_sales_intent(self):
         self.assertEqual(outbound_intent_for("customer"), "customer_sales")
@@ -49,13 +65,17 @@ class JoodOutboundTests(unittest.TestCase):
         self.assertIn("عروض", result)
         self.assertNotIn("كيف أساعدك", result)
 
-    def test_clear_merchant_opening_is_preserved_and_gets_official_site(self):
-        contact = SimpleNamespace(display_name="سارة", business_name="مركز سارة")
-        message = "السلام عليكم أستاذة سارة، معك جود من باكيجات. أتواصل معك لعرض فرصة تعاون مناسبة لمركز سارة، هل يناسبك أرسل التفاصيل؟"
-        result = ensure_outbound_opening(message, "merchant", contact)
-        self.assertTrue(result.startswith(message))
-        self.assertIn("https://pakgat.com/ar", result)
-        self.assertEqual(result.count("https://pakgat.com/ar"), 1)
+    def test_individual_merchant_send_uses_same_approved_copy_as_campaign(self):
+        contact = SimpleNamespace(display_name="بهاء السقا", business_name="Anwar car rental")
+        old_generated_message = (
+            "أهلًا بهاء السقا، معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون "
+            "لنشاط Anwar car rental تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة. "
+            "هل يناسبك أرسل لك التفاصيل؟"
+        )
+        result = ensure_outbound_opening(old_generated_message, "merchant", contact)
+        self.assertEqual(result, APPROVED_MERCHANT_MESSAGE)
+        self.assertNotIn("https://pakgat.com/ar", result)
+        self.assertNotIn("أهلًا بهاء السقا", result)
 
     def test_customer_opening_is_always_the_strict_catalog_template(self):
         contact = SimpleNamespace(display_name="بهاء", business_name=None)
