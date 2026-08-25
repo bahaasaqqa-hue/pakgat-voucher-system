@@ -99,7 +99,25 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         self.assertIn("بعقد رسمي وموثق يحفظ حقوق الجميع", action.reply)
         self.assertNotIn("أرسلوا لنا", action.reply)
 
-    def test_campaign_choice_action_does_not_hijack_question_or_inbound_merchant(self):
+    def test_choice_one_also_works_for_individual_outbound_merchant_test_flow(self):
+        resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
+        self.assertIsNotNone(resolver, "merchant campaign choice resolver is missing")
+
+        individual_row = remember_outreach_context(
+            self.db,
+            8,
+            "merchant",
+            "اختبار استقطاب تاجر بشكل فردي",
+            "individual",
+        )
+
+        action = resolver("1", "merchant", individual_row)
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.handoff_kind, "merchant_partnership")
+        self.assertIn("*مسؤول الشراكات في بكجات*", action.reply)
+
+    def test_campaign_choice_action_does_not_hijack_questions_or_customers(self):
         resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
         self.assertIsNotNone(resolver, "merchant campaign choice resolver is missing")
 
@@ -111,16 +129,8 @@ class JoodWhatsAppContextTests(unittest.TestCase):
             "campaign",
         )
         self.assertIsNone(resolver("2", "merchant", campaign_row))
-
-        inbound_row = remember_outreach_context(
-            self.db,
-            8,
-            "merchant",
-            "محادثة فردية",
-            "individual",
-        )
-        self.assertIsNone(resolver("1", "merchant", inbound_row))
         self.assertIsNone(resolver("1", "customer", campaign_row))
+        self.assertIsNone(resolver("مرحبا", "merchant", campaign_row))
 
 
 if __name__ == "__main__":
