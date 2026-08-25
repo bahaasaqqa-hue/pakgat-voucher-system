@@ -22,6 +22,7 @@ from app import ai_company
 from app import ai_company_sources
 from app import google_analytics
 from app.ai_company_governance import CompanyApproval, generate_ceo_brief
+from app.ai_company_growth import growth_metrics
 from app.ai_company_hunter import CompanyLead
 from app.ai_company_readiness import summarize_system_statuses
 from app.ai_company_store_ops import StoreOpsIssue
@@ -53,13 +54,13 @@ NAV_ITEMS = [
 
 SYSTEM_CARDS = [
     ("01", "القيادة التنفيذية", "يعمل", "/admin/company/brief", "الملخص التنفيذي، الأولويات، القرارات والموافقات."),
-    ("02", "التقارير ومركز البيانات", "يعمل جزئيًا", "/admin/company/analytics", "بيانات سلة والقسائم والمصادر المتصلة؛ Google ينتظر الربط."),
+    ("02", "التقارير ومركز البيانات", "يعمل", "/admin/company/analytics", "مؤشرات سلة والقسائم وWhatsApp وGA4 من المصادر المتصلة."),
     ("03", "السوق والمنافسون", "يعمل جزئيًا", "/admin/company/competitors", "قائمة المنافسين والرادار؛ الإدخال التلقائي الكامل إلى Data Hub قيد الاستكمال."),
     ("04", "المنتجات والأسعار", "يعمل جزئيًا", "/admin/company/products", "بيانات المنتجات المرصودة والفرص؛ نطاقات السوق والهامش قيد التوسعة."),
     ("05", "الشركاء والتجار", "يعمل", "/admin/company/hunter", "Merchant Hunter + Supplier Hunter + Pipeline وموافقات التواصل."),
     ("06", "النمو والمبيعات", "يعمل جزئيًا", "/admin/company/analytics", "Orders وRevenue وAOV؛ التحويل والاحتفاظ ينتظران مصادر إضافية."),
-    ("07", "عمليات المتجر", "يعمل جزئيًا", "/admin/company/store-ops", "مشاكل العرض والكتالوج من البيانات المتصلة؛ القراءة الكاملة تنتظر Salla OAuth."),
-    ("08", "SEO وGoogle", "بانتظار الربط", "/admin/company/seo", "Search Console وGA4 غير مربوطين بعد."),
+    ("07", "عمليات المتجر", "يعمل", "/admin/company/store-ops", "Salla OAuth والويبهوكس متصلان؛ مشاكل العرض والكتالوج تُرصد من البيانات المتاحة."),
+    ("08", "SEO وGoogle", "يعمل جزئيًا", "/admin/company/seo", "GA4 متصل فعليًا؛ Google Search Console بانتظار الربط."),
     ("09", "البراند والاستوديو الإبداعي", "هيكل جاهز", "/admin/company/brand", "الهوية، صور المنتجات، البنرات والأصول الإبداعية."),
     ("10", "السوشيال وتوليد الطلب", "هيكل جاهز", "/admin/company/social", "المحتوى والحملات وربط الأداء بالمبيعات بعد ربط مصادره."),
     ("11", "القسائم ودورة العميل", "يعمل جزئيًا", "/admin/company/crm", "Voucher + QR + WhatsApp تعمل؛ Retention وRepeat Customer قيد الاستكمال."),
@@ -127,6 +128,57 @@ def _format_score(value) -> str:
         return f"{float(value):g}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _money(value) -> str:
+    return f"{float(value or 0):,.2f} SAR"
+
+
+def analytics_overview_rows(data: dict) -> list[tuple[str, str, str]]:
+    vouchers_total = int(data.get("vouchers_total") or 0)
+    vouchers_redeemed = int(data.get("vouchers_redeemed") or 0)
+    redemption_rate = (vouchers_redeemed / vouchers_total * 100) if vouchers_total else 0.0
+    ga_available = data.get("ga_sessions") is not None
+    return [
+        ("إجمالي الطلبات المرصودة", f"{int(data.get('orders') or 0):,}", "ok"),
+        ("الطلبات المؤكدة", f"{int(data.get('confirmed_orders') or 0):,}", "ok"),
+        ("الطلبات المعلقة", f"{int(data.get('pending_orders') or 0):,}", "ok"),
+        ("الإيرادات المؤكدة", _money(data.get("revenue")), "ok"),
+        ("متوسط قيمة الطلب", _money(data.get("aov")), "ok"),
+        ("الوحدات المباعة", f"{int(data.get('confirmed_units') or 0):,}", "ok"),
+        ("المنتجات المباعة", f"{int(data.get('products_sold') or 0):,}", "ok"),
+        ("جلسات الموقع · آخر 28 يومًا", f"{int(data.get('ga_sessions') or 0):,}" if ga_available else "بانتظار أول قراءة GA4", "ok" if ga_available else "pending"),
+        ("مستخدمو الموقع · آخر 28 يومًا", f"{int(data.get('ga_users') or 0):,}" if ga_available else "بانتظار أول قراءة GA4", "ok" if ga_available else "pending"),
+        ("مشاهدات الصفحات · آخر 28 يومًا", f"{int(data.get('ga_page_views') or 0):,}" if ga_available else "بانتظار أول قراءة GA4", "ok" if ga_available else "pending"),
+        ("الأحداث الرئيسية · آخر 28 يومًا", f"{int(data.get('ga_key_events') or 0):,}" if ga_available else "بانتظار أول قراءة GA4", "ok" if ga_available else "pending"),
+        ("القسائم الصادرة", f"{vouchers_total:,}", "ok"),
+        ("القسائم المستخدمة", f"{vouchers_redeemed:,}", "ok"),
+        ("نسبة استخدام القسائم", f"{redemption_rate:.1f}%", "ok"),
+        ("إشعارات العملاء المرسلة", f"{int(data.get('notifications_sent') or 0):,}", "ok"),
+        ("إشعارات العملاء الفاشلة", f"{int(data.get('notifications_failed') or 0):,}", "ok" if not data.get("notifications_failed") else "pending"),
+        ("تأكيدات استلام القسيمة", f"{int(data.get('delivery_confirmed') or 0):,}", "ok"),
+        ("طلبات مساعدة العملاء", f"{int(data.get('help_requests') or 0):,}", "ok"),
+        ("العملاء العائدون / Retention", "يحتاج معرّف عميل من المصدر", "pending"),
+    ]
+
+
+def analytics_overview_snapshot(db: Session) -> dict:
+    growth = growth_metrics(db)
+    ga = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
+    return {
+        **growth,
+        "orders": growth.get("orders_total", 0),
+        "ga_sessions": ga.sessions if ga else None,
+        "ga_users": ga.active_users if ga else None,
+        "ga_page_views": ga.page_views if ga else None,
+        "ga_key_events": ga.key_events if ga else None,
+        "vouchers_total": _count(db, core.Voucher),
+        "vouchers_redeemed": _count(db, core.Voucher, core.Voucher.status == "redeemed"),
+        "notifications_sent": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.status == "sent"),
+        "notifications_failed": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.status == "failed"),
+        "delivery_confirmed": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.response_value == "1"),
+        "help_requests": _count(db, core.CustomerNotification, core.CustomerNotification.notification_type == "voucher_issued", core.CustomerNotification.response_value == "2"),
+    }
 
 
 def _nav_html(path: str) -> str:
@@ -389,21 +441,28 @@ def visits_page(request: Request, db: Session = Depends(core.get_db)):
 
 @core.app.get("/admin/company/analytics", response_class=HTMLResponse)
 def analytics_page(request: Request, db: Session = Depends(core.get_db)):
-    orders = _count(db, SallaOrderSnapshot)
-    return simple_status_page(request, "التحليلات والتقارير", "يجمع هذا القسم مؤشرات التشغيل من المصادر المتصلة فقط.", [("طلبات مرصودة", str(orders), "ok"), ("المبيعات والنمو", "بيانات جزئية متاحة", "ok"), ("التحويل والاحتفاظ", "بانتظار مصادر إضافية", "pending")], [("تفاصيل النمو والمنتجات", "/admin/company/growth"), ("مصادر البيانات", "/admin/company/sources")])
+    data = analytics_overview_snapshot(db)
+    return simple_status_page(
+        request,
+        "التحليلات والتقارير",
+        "لوحة موحدة من بيانات Salla وGA4 والقسائم وWhatsApp الفعلية. لا تتضمن أرقامًا تقديرية.",
+        analytics_overview_rows(data),
+        [("تفاصيل النمو والمنتجات", "/admin/company/growth"), ("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")],
+    )
 
 
 @core.app.get("/admin/company/products", response_class=HTMLResponse)
 def products_page(request: Request, db: Session = Depends(core.get_db)):
-    items = _count(db, SallaOrderItemSnapshot)
-    return simple_status_page(request, "المنتجات والأسعار", "الهدف: Hot / Growing / Slow / Dormant، نطاق السوق، هامش بكجات وOpportunity Score. الآن نعرض فقط ما تدعمه البيانات المتصلة.", [("بنود منتجات مرصودة", str(items), "ok"), ("بيانات أسعار السوق", "قيد الربط مع الرادار", "pending"), ("هامش الربح الآلي", "يحتاج سعر شراء/توريد موثوق", "pending")], [("تفاصيل Growth & Products", "/admin/company/growth"), ("السوق والمنافسون", "/admin/company/competitors")])
+    metrics = growth_metrics(db)
+    return simple_status_page(request, "المنتجات والأسعار", "مؤشرات فعلية من بنود الطلبات المؤكدة؛ أسعار السوق والهامش لا يظهران قبل توفر مصدر موثوق.", [("بنود المنتجات المرصودة", f"{_count(db, SallaOrderItemSnapshot):,}", "ok"), ("المنتجات المباعة", f"{metrics['products_sold']:,}", "ok"), ("الوحدات المباعة", f"{metrics['confirmed_units']:,}", "ok"), ("إيرادات المنتجات المؤكدة", _money(metrics['revenue']), "ok"), ("بيانات أسعار السوق", "بانتظار مصدر الرادار", "pending"), ("هامش الربح الآلي", "يحتاج سعر شراء/توريد موثوق", "pending")], [("ترتيب المنتجات والمبيعات", "/admin/company/growth"), ("السوق والمنافسون", "/admin/company/competitors")])
 
 
 @core.app.get("/admin/company/seo", response_class=HTMLResponse)
 def seo_page(request: Request, db: Session = Depends(core.get_db)):
     sc = _source_state(db, "Google Search Console")
     ga = _source_state(db, "Google Analytics")
-    return simple_status_page(request, "SEO وGoogle", "Keywords، Impressions، CTR، Positions، Indexing، Schema وGEO ستظهر هنا عند اتصال مصادر Google الفعلية.", [("Search Console", _status_ar(sc), "ok" if sc != "Needs Integration" else "pending"), ("Google Analytics", _status_ar(ga), "ok" if ga != "Needs Integration" else "pending"), ("SEO Watch", "لا يختلق بيانات قبل الربط", "ok")], [("مصادر البيانات", "/admin/company/sources")])
+    ga_row = google_analytics.latest_ga4_snapshot(db, google_analytics.GA4_PROPERTY_ID)
+    return simple_status_page(request, "SEO وGoogle", "GA4 متصل لقياس الزيارات والسلوك. الكلمات والظهور وCTR والفهرسة تحتاج Google Search Console.", [("Google Analytics", _status_ar(ga), "ok" if ga != "Needs Integration" else "pending"), ("جلسات GA4 · آخر 28 يومًا", f"{ga_row.sessions:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending"), ("مشاهدات الصفحات", f"{ga_row.page_views:,}" if ga_row else "بانتظار أول قراءة", "ok" if ga_row else "pending"), ("Google Search Console", _status_ar(sc), "ok" if sc != "Needs Integration" else "pending"), ("الكلمات · الظهور · CTR · الفهرسة", "تظهر بعد ربط Search Console", "pending")], [("تفاصيل الزيارات", "/admin/company/visits"), ("مصادر البيانات", "/admin/company/sources")])
 
 
 @core.app.get("/admin/company/social", response_class=HTMLResponse)
@@ -418,15 +477,20 @@ def brand_page(request: Request):
 
 @core.app.get("/admin/company/crm", response_class=HTMLResponse)
 def crm_page(request: Request, db: Session = Depends(core.get_db)):
-    snap = ai_company.collect_company_snapshot(db)
-    return simple_status_page(request, "القسائم ودورة العميل", "Order → Voucher → WhatsApp → Redemption → Merchant confirmation → Retention.", [("القسائم الصادرة", str(snap['vouchers']['total']), "ok"), ("القسائم المستخدمة", str(snap['vouchers']['redeemed']), "ok"), ("WhatsLoop", "جاهز" if snap['integrations']['whatsloop'] else "بانتظار الربط", "ok" if snap['integrations']['whatsloop'] else "pending"), ("Retention / Repeat Customer", "قيد الاستكمال", "pending")], [("تفاصيل سلة", "/admin/company/salla")])
+    data = analytics_overview_snapshot(db)
+    total = int(data["vouchers_total"] or 0)
+    redeemed = int(data["vouchers_redeemed"] or 0)
+    rate = redeemed / total * 100 if total else 0.0
+    return simple_status_page(request, "القسائم ودورة العميل", "مسار فعلي من إصدار القسيمة حتى الإرسال والتأكيد والاستخدام وطلب المساعدة.", [("القسائم الصادرة", f"{total:,}", "ok"), ("إشعارات القسيمة المرسلة", f"{data['notifications_sent']:,}", "ok"), ("أكد العميل الاستلام · رد 1", f"{data['delivery_confirmed']:,}", "ok"), ("طلب مساعدة · رد 2", f"{data['help_requests']:,}", "ok"), ("القسائم المستخدمة", f"{redeemed:,}", "ok"), ("نسبة الاستخدام", f"{rate:.1f}%", "ok"), ("إشعارات فاشلة", f"{data['notifications_failed']:,}", "ok" if not data['notifications_failed'] else "pending"), ("Repeat Customer / Retention", "يحتاج معرّف عميل من Salla", "pending")], [("تفاصيل سلة", "/admin/company/salla"), ("التحليلات الشاملة", "/admin/company/analytics")])
 
 
 @core.app.get("/admin/company/technology", response_class=HTMLResponse)
 def technology_page(request: Request, db: Session = Depends(core.get_db)):
     salla = _source_state(db, "Salla Webhooks")
+    oauth = _source_state(db, "Salla OAuth / Merchant API")
     whats = _source_state(db, "WhatsLoop")
-    return simple_status_page(request, "التقنية والأمان", "حالة البنية التي تشغل Pakgat AI Company على Google، مع فصل ما يعمل فعليًا عما يزال قيد الربط.", [("Google Compute Engine", "يعمل", "ok"), ("PostgreSQL Data Hub", "يعمل", "ok"), ("Salla Webhooks", _status_ar(salla), "ok" if salla == "Connected" else "pending"), ("WhatsLoop", _status_ar(whats), "ok" if whats == "Connected" else "pending"), ("نسخ PostgreSQL اليومية", "مُجهّزة في النشر", "ok"), ("Security Watch المتقدم", "قيد الاستكمال", "pending")], [("مصادر البيانات", "/admin/company/sources")])
+    ga = _source_state(db, "Google Analytics")
+    return simple_status_page(request, "التقنية والأمان", "الحالة الفعلية للبنية والتكاملات المتصلة حاليًا.", [("Google Compute Engine", "يعمل", "ok"), ("PostgreSQL Data Hub", "يعمل", "ok"), ("Salla OAuth / Merchant API", _status_ar(oauth), "ok" if oauth == "Connected" else "pending"), ("Salla Webhooks", _status_ar(salla), "ok" if salla == "Connected" else "pending"), ("WhatsLoop", _status_ar(whats), "ok" if whats == "Connected" else "pending"), ("Google Analytics", _status_ar(ga), "ok" if ga == "Connected" else "pending"), ("نسخ PostgreSQL اليومية", "مُجهّزة في النشر", "ok"), ("Security Watch المتقدم", "قيد الاستكمال", "pending")], [("مصادر البيانات", "/admin/company/sources")])
 
 
 # Replace the two legacy entry pages with the approved V2 experience.
