@@ -34,6 +34,9 @@ from app.jood_whatsapp_settings import resolved_outreach_instruction
 from app.jood_whatsapp_context import remember_outreach_context
 
 
+PAKGAT_OFFICIAL_WEBSITE = "https://pakgat.com/ar"
+
+
 def outbound_intent_for(mode: str) -> str:
     return "merchant_prospecting" if (mode or "").strip().lower() == "merchant" else "customer_sales"
 
@@ -64,6 +67,15 @@ def build_contact_outreach_context(contact, instruction: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def ensure_merchant_website_link(message: str, mode: str) -> str:
+    clean = str(message or "").strip()
+    if str(mode or "").strip().lower() != "merchant":
+        return clean
+    if "pakgat.com" in clean.lower():
+        return clean
+    return f"{clean}\n\nللتعرف علينا: {PAKGAT_OFFICIAL_WEBSITE}"
+
+
 def ensure_outbound_opening(message: str, mode: str, contact, featured_product=None) -> str:
     """Prevent a first-touch outreach from degrading into an inbound help greeting."""
     if str(mode or "").strip().lower() == "customer" and featured_product is not None:
@@ -82,17 +94,18 @@ def ensure_outbound_opening(message: str, mode: str, contact, featured_product=N
             or featured_product.name in clean
         )
     ):
-        return clean
+        return ensure_merchant_website_link(clean, mode)
 
     name = str(getattr(contact, "display_name", "") or "").strip()
     business = str(getattr(contact, "business_name", "") or "").strip()
     greeting = f"أهلًا {name}، " if name else "أهلًا، "
     if str(mode or "").strip().lower() == "merchant":
         target = f" لنشاط {business}" if business else ""
-        return (
+        opening = (
             f"{greeting}معك جود من منصة باكيجات. أتواصل معك لعرض فرصة تعاون{target} "
             "تساعدكم في الوصول لعملاء جدد عبر عروض وبكجات مميزة. هل يناسبك أرسل لك التفاصيل؟"
         )
+        return ensure_merchant_website_link(opening, mode)
     return sales_opening_fallback(contact, featured_product)
 
 
