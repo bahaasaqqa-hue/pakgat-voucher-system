@@ -16,7 +16,8 @@ class MerchantUICairoTests(unittest.TestCase):
         rendered = polish(source, "/admin/merchants")
         self.assertIn("family=Cairo", rendered)
         self.assertIn("font-family:'Cairo'", rendered)
-        self.assertIn("button,input,select,textarea", rendered)
+        for control in ("button", "input", "select", "textarea"):
+            self.assertIn(f"body[data-unified-admin-theme] {control}", rendered)
 
     def test_merchant_finance_labels_are_arabic(self):
         polish = self._polisher()
