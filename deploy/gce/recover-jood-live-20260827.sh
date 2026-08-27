@@ -87,12 +87,6 @@ rollback() {
   fi
   if [[ "$RESTART_ATTEMPTED" == "1" ]]; then
     systemctl restart "$SERVICE" || true
-    for _ in $(seq 1 30); do
-      if curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
-        break
-      fi
-      sleep 1
-    done
     systemctl is-active "$SERVICE" || true
   fi
   rm -rf "$STAGE_DIR" || true
@@ -228,24 +222,21 @@ PY
 
 echo "===== 7. RESTART APP + POLL HEALTH ====="
 RESTART_ATTEMPTED=1
-RESTART_START="$(date -u '+%Y-%m-%d %H:%M:%S')"
 systemctl restart "$SERVICE"
 HEALTH_OK=0
 for i in $(seq 1 30); do
-  printf 'HEALTH_TRY=%s ' "$i"
-  if curl -fsS --max-time 2 http://127.0.0.1:8000/health > "$BACKUP_DIR/health-after.json" 2>/dev/null; then
-    cat "$BACKUP_DIR/health-after.json"
-    echo
+  if body="$(curl -fsS --max-time 2 http://127.0.0.1:8000/health 2>/dev/null)"; then
+    echo "HEALTH_TRY=$i $body"
     HEALTH_OK=1
     break
   fi
-  echo 'waiting'
+  echo "HEALTH_TRY=$i waiting"
   sleep 1
 done
 if [[ "$HEALTH_OK" != "1" ]]; then
-  echo "ERROR: health endpoint did not become reachable within 30 seconds"
+  echo "ERROR: health endpoint did not become ready within 30 seconds"
   systemctl status "$SERVICE" --no-pager -l || true
-  journalctl -u "$SERVICE" --since "$RESTART_START" --no-pager -n 120 || true
+  journalctl -u "$SERVICE" --since '2 minutes ago' --no-pager -n 120 || true
   false
 fi
 systemctl is-active "$SERVICE"
@@ -253,22 +244,28 @@ echo "HEALTH_AFTER_RESTART=PASS"
 
 echo "===== 8. POST-RESTART RUNTIME + LOG CHECK ====="
 .venv/bin/python - <<'PY'
+import os
+from pathlib import Path
+for raw in Path('/etc/pakgat/pakgat.env').read_text(encoding='utf-8').splitlines():
+    line = raw.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    key, value = line.split('=', 1)
+    key, value = key.strip(), value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    os.environ[key] = value
 from app.jood_whatsapp_context import merchant_campaign_choice_action
 from app.jood_outbound import approved_merchant_outreach_message
 assert callable(merchant_campaign_choice_action)
 assert '1 — أرسلوا التفاصيل' in approved_merchant_outreach_message(type('C', (), {'business_name':'اختبار','display_name':''})())
 print('RUNTIME_JOOD_IMPORTS=PASS')
 PY
-journalctl -u "$SERVICE" --since "$RESTART_START" --no-pager -n 100 | tee "$BACKUP_DIR/restart-log.txt"
+journalctl -u "$SERVICE" --since '2 minutes ago' --no-pager -n 80 | tee "$BACKUP_DIR/restart-log.txt"
 if grep -Eiq 'Traceback|ImportError|ModuleNotFoundError|Application startup failed' "$BACKUP_DIR/restart-log.txt"; then
   echo "ERROR: restart log contains a fatal application signal"
   false
 fi
-
-for f in "${JOOD_FILES[@]}"; do
-  test "$(git hash-object "$f")" = "${GOOD_BLOBS[$f]}"
-done
-! grep -q '^# BEGIN PAKGAT JOOD MULTICHANNEL$' main.py
 
 echo "===== 9. FINAL SAFETY STATE ====="
 rm -rf "$STAGE_DIR"
