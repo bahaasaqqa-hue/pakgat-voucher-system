@@ -49,10 +49,15 @@ class MerchantUICairoTests(unittest.TestCase):
         source = "<html><head></head><body><p>Redeemed active</p></body></html>"
         self.assertEqual(polish(source, "/v/example"), source)
 
-    def test_non_finance_admin_page_is_untouched(self):
+    def test_non_finance_admin_page_gets_cairo_without_finance_translation(self):
         polish = self._polisher()
-        source = "<html><head></head><body data-unified-admin-theme='ai'><main>Jood Redeemed active</main></body></html>"
-        self.assertEqual(polish(source, "/admin/company/jood/control"), source)
+        source = "<html><head></head><body data-unified-admin-theme='ai'><main>Jood <span>Redeemed</span> <span>active</span></main></body></html>"
+        rendered = polish(source, "/admin/company/jood/control")
+        self.assertIn("family=Cairo", rendered)
+        self.assertIn(">Redeemed<", rendered)
+        self.assertIn(">active<", rendered)
+        self.assertNotIn(">مستخدمة<", rendered)
+        self.assertNotIn(">نشط<", rendered)
 
     def test_main_loads_cairo_after_unified_theme(self):
         source = Path("main.py").read_text(encoding="utf-8")
