@@ -27,7 +27,15 @@ class VoucherAPISecurityTests(unittest.TestCase):
             "client": ("127.0.0.1", 12345),
         })
 
-    def test_missing_secret_is_rejected(self):
+    def test_unconfigured_secret_preserves_legacy_api_behavior(self):
+        async def next_handler(request):
+            return JSONResponse({"ok": True, "legacy": True})
+        with patch.object(hooks, "VOUCHER_API_SECRET", ""):
+            response = asyncio.run(hooks._protect_voucher_creation_api(self._request(), next_handler))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'"legacy":true', response.body)
+
+    def test_missing_secret_is_rejected_when_guard_is_configured(self):
         async def next_handler(request):
             return JSONResponse({"ok": True})
         with patch.object(hooks, "VOUCHER_API_SECRET", "strong-secret"):
