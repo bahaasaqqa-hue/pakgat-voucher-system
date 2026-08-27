@@ -62,8 +62,8 @@ class AdminNavigationTypographyTests(unittest.TestCase):
         self.assertIn("body[data-unified-admin-theme] .ua-content h1,", rendered)
         self.assertIn("body[data-unified-admin-theme] .ua-content h2,", rendered)
         self.assertIn("body[data-unified-admin-theme] .ua-content h3{font-weight:700!important", rendered)
-        self.assertIn(".ua-content th{font-weight:600!important}", rendered)
-        self.assertIn(".ua-content td{font-weight:400!important}", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content th{font-weight:600!important", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content td{font-weight:400!important", rendered)
         self.assertIn("body[data-unified-admin-theme] .ua-content .btn,", rendered)
         self.assertIn("body[data-unified-admin-theme] .ua-content button{font-weight:500!important", rendered)
 
