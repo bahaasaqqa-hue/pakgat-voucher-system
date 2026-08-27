@@ -48,6 +48,11 @@ class MerchantUICairoTests(unittest.TestCase):
         source = "<html><head></head><body><p>Redeemed active</p></body></html>"
         self.assertEqual(polish(source, "/v/example"), source)
 
+    def test_non_finance_admin_page_is_untouched(self):
+        polish = self._polisher()
+        source = "<html><head></head><body data-unified-admin-theme='ai'><main>Jood Redeemed active</main></body></html>"
+        self.assertEqual(polish(source, "/admin/company/jood/control"), source)
+
     def test_main_loads_cairo_after_unified_theme(self):
         source = Path("main.py").read_text(encoding="utf-8")
         self.assertIn("from app import merchant_ui_cairo", source)
