@@ -1,4 +1,5 @@
 import importlib.util
+from pathlib import Path
 import unittest
 
 
@@ -46,6 +47,11 @@ class MerchantUICairoTests(unittest.TestCase):
         polish = self._polisher()
         source = "<html><head></head><body><p>Redeemed active</p></body></html>"
         self.assertEqual(polish(source, "/v/example"), source)
+
+    def test_main_loads_cairo_after_unified_theme(self):
+        source = Path("main.py").read_text(encoding="utf-8")
+        self.assertIn("from app import merchant_ui_cairo", source)
+        self.assertGreater(source.index("merchant_ui_cairo"), source.index("admin_unified_theme"))
 
 
 if __name__ == "__main__":
