@@ -3,7 +3,7 @@
 The existing voucher/WhatsLoop/Salla implementation stays the source flow. This
 module wraps only the agreed policy points: no merchant purchase notification,
 refund/cancel lifecycle, financial snapshots/payables, dashboard summary and
-internal voucher-creation API protection.
+opt-in internal voucher-creation API protection.
 """
 
 from __future__ import annotations
@@ -370,23 +370,22 @@ for _route in core.app.routes:
 
 
 # ---------------------------------------------------------------------------
-# 6) Protect manual/internal voucher creation API. Salla webhook is unaffected.
+# 6) Opt-in protection for manual/internal voucher creation API.
+# Existing API behavior is preserved until VOUCHER_API_SECRET is explicitly set.
+# Salla webhook is unaffected.
 # ---------------------------------------------------------------------------
 
 VOUCHER_API_SECRET = core.env("VOUCHER_API_SECRET")
-if not VOUCHER_API_SECRET and core.ADMIN_SECRET != "change-this-admin-secret":
-    VOUCHER_API_SECRET = core.ADMIN_SECRET
 core.VOUCHER_API_SECRET = VOUCHER_API_SECRET
 
 
 @core.app.middleware("http")
 async def _protect_voucher_creation_api(request: Request, call_next):
-    if request.method.upper() == "POST" and request.url.path == "/api/vouchers":
-        if not VOUCHER_API_SECRET:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Voucher creation API secret is not configured."},
-            )
+    if (
+        request.method.upper() == "POST"
+        and request.url.path == "/api/vouchers"
+        and VOUCHER_API_SECRET
+    ):
         supplied = request.headers.get("x-pakgat-voucher-secret", "")
         if not supplied or not hmac.compare_digest(supplied, VOUCHER_API_SECRET):
             return JSONResponse(
