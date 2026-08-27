@@ -4,7 +4,6 @@ set -Eeuo pipefail
 APP_DIR="/opt/pakgat-voucher-system"
 SERVICE="pakgat-voucher.service"
 CAMPAIGN_SERVICE="pakgat-jood-campaign.service"
-EXPECTED_LIVE_HEAD="5bad8bbb61863ee6ba5c7451251fc3b5342f28b2"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
 BACKUP_DIR="/opt/pakgat-repair-backups/jood-hotfix-${STAMP}"
 RESTART_ATTEMPTED=0
@@ -15,7 +14,6 @@ JOOD_FILES=(
   "app/jood_whatsapp_campaign.py"
   "app/jood_whatsapp_context.py"
 )
-FILES=("${JOOD_FILES[@]}" "main.py")
 
 declare -A EXPECTED_HEAD_BLOBS=(
   ["app/jood_identity.py"]="1bc196f163c76ce0b3566dce223076a11729db9e"
@@ -29,53 +27,48 @@ cd "$APP_DIR"
 echo "===== 0. SAFETY GATES — NO CHANGES YET ====="
 CURRENT_HEAD="$(git rev-parse HEAD)"
 echo "CURRENT_HEAD=$CURRENT_HEAD"
-if [[ "$CURRENT_HEAD" != "$EXPECTED_LIVE_HEAD" ]]; then
-  echo "ABORT: live HEAD changed since diagnosis. Nothing was modified."
-  exit 20
-fi
+
+# Do not trust a specific repository HEAD because unrelated admin/UI commits may land.
+# Instead, prove that the four Jood files we intend to restore still point at the exact
+# known-good repository blobs. If any of them changed upstream, abort before touching disk.
 for f in "${JOOD_FILES[@]}"; do
   actual="$(git rev-parse "HEAD:$f")"
   expected="${EXPECTED_HEAD_BLOBS[$f]}"
-  echo "$f HEAD_BLOB=$actual"
+  echo "$f HEAD_BLOB=$actual EXPECTED=$expected"
   if [[ "$actual" != "$expected" ]]; then
-    echo "ABORT: $f HEAD blob is not the verified known-good blob. Nothing was modified."
+    echo "ABORT: $f HEAD blob changed since diagnosis. Nothing was modified."
     exit 21
   fi
 done
-if git show HEAD:main.py | grep -q "BEGIN PAKGAT JOOD MULTICHANNEL"; then
-  echo "ABORT: live HEAD main.py unexpectedly contains multichannel bootstrap. Nothing was modified."
+
+# main.py is handled surgically: only the exact uncommitted multichannel bootstrap is removed.
+# Never checkout main.py wholesale, because today's unrelated admin/navigation work may be valid.
+if git diff -- main.py | grep -q '^+# BEGIN PAKGAT JOOD MULTICHANNEL'; then
+  echo "MAIN_MULTICHANNEL_LOCAL_PATCH=FOUND"
+elif grep -q '^# BEGIN PAKGAT JOOD MULTICHANNEL$' main.py; then
+  echo "ABORT: multichannel block exists but is not a local diff; manual review required. Nothing was modified."
   exit 22
+else
+  echo "MAIN_MULTICHANNEL_LOCAL_PATCH=NOT_FOUND"
 fi
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 
-restore_preincident_disk_state() {
-  for f in "${JOOD_FILES[@]}"; do
-    if [[ -f "$BACKUP_DIR/$f" ]]; then
-      install -D -o pakgat -g pakgat -m 0644 "$BACKUP_DIR/$f" "$APP_DIR/$f"
-    fi
-  done
-  git checkout HEAD -- main.py || true
-  chown pakgat:pakgat main.py || true
-}
-
 rollback() {
   local rc=$?
   trap - ERR
   echo "===== FAILURE — CONTROLLED ROLLBACK ====="
-  if [[ "$RESTART_ATTEMPTED" == "0" ]]; then
-    for f in "${FILES[@]}"; do
-      if [[ -f "$BACKUP_DIR/$f" ]]; then
-        install -D -o pakgat -g pakgat -m 0644 "$BACKUP_DIR/$f" "$APP_DIR/$f"
+  if [[ -d "$BACKUP_DIR/files" ]]; then
+    for f in "${JOOD_FILES[@]}" main.py; do
+      if [[ -f "$BACKUP_DIR/files/$f" ]]; then
+        install -D -o pakgat -g pakgat -m 0644 "$BACKUP_DIR/files/$f" "$APP_DIR/$f"
       fi
     done
-    echo "Live application process was not restarted."
-  else
-    restore_preincident_disk_state
+  fi
+  if [[ "$RESTART_ATTEMPTED" == "1" ]]; then
     systemctl restart "$SERVICE" || true
     systemctl is-active "$SERVICE" || true
-    echo "Returned to the pre-recovery runtime code shape."
   fi
   echo "Campaign 1 remains paused for safety."
   echo "Backup: $BACKUP_DIR"
@@ -84,19 +77,19 @@ rollback() {
 trap rollback ERR
 
 echo "===== 1. SNAPSHOT CURRENT STATE ====="
-git rev-parse HEAD | tee "$BACKUP_DIR/head.txt"
+printf '%s\n' "$CURRENT_HEAD" > "$BACKUP_DIR/head.txt"
 git status --short | tee "$BACKUP_DIR/git-status.txt"
-git diff -- "${FILES[@]}" > "$BACKUP_DIR/jood-local.diff" || true
-for f in "${FILES[@]}"; do
+git diff -- app/jood_identity.py app/jood_policy.py app/jood_whatsapp_campaign.py app/jood_whatsapp_context.py main.py > "$BACKUP_DIR/pre-recovery.diff" || true
+for f in "${JOOD_FILES[@]}" main.py; do
   if [[ -f "$f" ]]; then
-    mkdir -p "$BACKUP_DIR/$(dirname "$f")"
-    cp -a "$f" "$BACKUP_DIR/$f"
+    mkdir -p "$BACKUP_DIR/files/$(dirname "$f")"
+    cp -a "$f" "$BACKUP_DIR/files/$f"
   fi
 done
 for f in app/jood_link_card.py app/jood_multichannel.py; do
   if [[ -f "$f" ]]; then
-    mkdir -p "$BACKUP_DIR/$(dirname "$f")"
-    cp -a "$f" "$BACKUP_DIR/$f"
+    mkdir -p "$BACKUP_DIR/files/$(dirname "$f")"
+    cp -a "$f" "$BACKUP_DIR/files/$f"
   fi
 done
 echo "BACKUP_DIR=$BACKUP_DIR"
@@ -133,17 +126,31 @@ PY
 echo "===== 3. RECORD INCIDENT SIGNATURE ====="
 grep -q "send_whatsapp_link_card" app/jood_whatsapp_campaign.py && echo "BAD_LINK_CARD_PATCH=FOUND" || echo "BAD_LINK_CARD_PATCH=NOT_FOUND"
 grep -q "def merchant_campaign_choice_action" app/jood_whatsapp_context.py && echo "CHOICE_RESOLVER=PRESENT" || echo "CHOICE_RESOLVER=MISSING"
-grep -q "BEGIN PAKGAT JOOD MULTICHANNEL" main.py && echo "MULTICHANNEL_BOOTSTRAP=FOUND" || echo "MULTICHANNEL_BOOTSTRAP=NOT_FOUND"
+grep -q "is_probable_business_auto_reply" app/jood_identity.py && echo "AUTO_REPLY_FILTER=PRESENT" || echo "AUTO_REPLY_FILTER=MISSING"
 
-echo "===== 4. RESTORE ONLY VERIFIED JOOD FILES TO CURRENT LIVE HEAD ====="
-git checkout HEAD -- "${FILES[@]}"
-chown pakgat:pakgat "${FILES[@]}"
+echo "===== 4. RESTORE ONLY THE FOUR VERIFIED JOOD FILES ====="
+git checkout HEAD -- "${JOOD_FILES[@]}"
+chown pakgat:pakgat "${JOOD_FILES[@]}"
+
+# Remove only the exact local multichannel bootstrap block from main.py, if present.
+python3 - <<'PY'
+from pathlib import Path
+p = Path('main.py')
+s = p.read_text(encoding='utf-8')
+block = '''\n# BEGIN PAKGAT JOOD MULTICHANNEL\nfrom app.jood_multichannel import install_jood_multichannel as _install_jood_multichannel\n_install_jood_multichannel(app)\n# END PAKGAT JOOD MULTICHANNEL\n'''
+if block in s:
+    p.write_text(s.replace(block, '\n'), encoding='utf-8')
+    print('MAIN_MULTICHANNEL_LOCAL_PATCH=REMOVED')
+else:
+    print('MAIN_MULTICHANNEL_LOCAL_PATCH=NO_CHANGE')
+PY
+chown pakgat:pakgat main.py
 
 echo "===== 5. VERIFY INCIDENT PATCHES ARE REMOVED ====="
 ! grep -q "send_whatsapp_link_card" app/jood_whatsapp_campaign.py
 grep -q "def merchant_campaign_choice_action" app/jood_whatsapp_context.py
 grep -q "is_probable_business_auto_reply" app/jood_identity.py
-! grep -q "BEGIN PAKGAT JOOD MULTICHANNEL" main.py
+! grep -q '^# BEGIN PAKGAT JOOD MULTICHANNEL$' main.py
 for f in "${JOOD_FILES[@]}"; do
   test "$(git hash-object "$f")" = "${EXPECTED_HEAD_BLOBS[$f]}"
 done
@@ -221,7 +228,7 @@ PY
 echo "===== 10. FINAL SAFETY STATE ====="
 echo "Campaign 1 intentionally remains PAUSED."
 echo "No queued campaign contact was sent by this recovery."
-echo "No site/theme, voucher, product, merchant-finance, or env file was changed."
+echo "No site/theme, voucher, product, merchant-finance, env, or database business data was changed (except campaign 1 -> paused)."
 echo "Backup: $BACKUP_DIR"
 echo "RECOVERY_COMPLETE=YES"
 trap - ERR
