@@ -139,6 +139,11 @@ for _route in core.app.routes:
         break
 
 
+# Load branch management as a sibling additive extension. Keeping this import
+# here avoids further changes to the long application entry file.
+from app import merchant_branches as _merchant_branches  # noqa: E402,F401
+
+
 def run_once() -> int:
     with core.SessionLocal() as db:
         changed = expire_due_vouchers(db)
