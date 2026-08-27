@@ -53,7 +53,6 @@ for f in "${JOOD_FILES[@]}"; do
   fi
 done
 
-# Prove this is still the diagnosed incident family before any production change.
 INCIDENT_SCORE=0
 grep -q "send_whatsapp_link_card" app/jood_whatsapp_campaign.py && { echo "SIGNATURE: bad link-card campaign patch present"; INCIDENT_SCORE=$((INCIDENT_SCORE+1)); } || true
 grep -q "def merchant_campaign_choice_action" app/jood_whatsapp_context.py || { echo "SIGNATURE: merchant choice resolver missing"; INCIDENT_SCORE=$((INCIDENT_SCORE+1)); }
@@ -64,8 +63,6 @@ if [[ "$INCIDENT_SCORE" -lt 2 ]]; then
   exit 22
 fi
 
-# The individual send route must exist before we touch anything. We restore it from the same pinned good commit,
-# but this guard catches a materially different application layout.
 grep -q '/admin/company/jood/whatsapp/send-now' app/jood_outbound.py || {
   echo "ABORT: individual send-now route is missing from current app. Nothing was modified."
   rm -rf "$STAGE_DIR"
@@ -90,6 +87,12 @@ rollback() {
   fi
   if [[ "$RESTART_ATTEMPTED" == "1" ]]; then
     systemctl restart "$SERVICE" || true
+    for _ in $(seq 1 30); do
+      if curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
     systemctl is-active "$SERVICE" || true
   fi
   rm -rf "$STAGE_DIR" || true
@@ -151,8 +154,6 @@ for f in "${JOOD_FILES[@]}"; do
   install -D -o pakgat -g pakgat -m 0644 "$STAGE_DIR/$f" "$APP_DIR/$f"
 done
 
-# Do NOT replace main.py wholesale. Remove only the exact experimental Jood multichannel bootstrap,
-# preserving every unrelated site/admin/merchant-finance change made today.
 python3 - <<'PY'
 from pathlib import Path
 p = Path('main.py')
@@ -225,12 +226,30 @@ print('APPROVED_MERCHANT_OPENING=PASS')
 print('MERCHANT_CHOICE_1_FLOW=PASS')
 PY
 
-echo "===== 7. RESTART APP ====="
+echo "===== 7. RESTART APP + POLL HEALTH ====="
 RESTART_ATTEMPTED=1
+RESTART_START="$(date -u '+%Y-%m-%d %H:%M:%S')"
 systemctl restart "$SERVICE"
-sleep 3
+HEALTH_OK=0
+for i in $(seq 1 30); do
+  printf 'HEALTH_TRY=%s ' "$i"
+  if curl -fsS --max-time 2 http://127.0.0.1:8000/health > "$BACKUP_DIR/health-after.json" 2>/dev/null; then
+    cat "$BACKUP_DIR/health-after.json"
+    echo
+    HEALTH_OK=1
+    break
+  fi
+  echo 'waiting'
+  sleep 1
+done
+if [[ "$HEALTH_OK" != "1" ]]; then
+  echo "ERROR: health endpoint did not become reachable within 30 seconds"
+  systemctl status "$SERVICE" --no-pager -l || true
+  journalctl -u "$SERVICE" --since "$RESTART_START" --no-pager -n 120 || true
+  false
+fi
 systemctl is-active "$SERVICE"
-curl -fsS http://127.0.0.1:8000/health | tee "$BACKUP_DIR/health-after.json"
+echo "HEALTH_AFTER_RESTART=PASS"
 
 echo "===== 8. POST-RESTART RUNTIME + LOG CHECK ====="
 .venv/bin/python - <<'PY'
@@ -240,11 +259,16 @@ assert callable(merchant_campaign_choice_action)
 assert '1 — أرسلوا التفاصيل' in approved_merchant_outreach_message(type('C', (), {'business_name':'اختبار','display_name':''})())
 print('RUNTIME_JOOD_IMPORTS=PASS')
 PY
-journalctl -u "$SERVICE" --since '2 minutes ago' --no-pager -n 80 | tee "$BACKUP_DIR/restart-log.txt"
+journalctl -u "$SERVICE" --since "$RESTART_START" --no-pager -n 100 | tee "$BACKUP_DIR/restart-log.txt"
 if grep -Eiq 'Traceback|ImportError|ModuleNotFoundError|Application startup failed' "$BACKUP_DIR/restart-log.txt"; then
   echo "ERROR: restart log contains a fatal application signal"
   false
 fi
+
+for f in "${JOOD_FILES[@]}"; do
+  test "$(git hash-object "$f")" = "${GOOD_BLOBS[$f]}"
+done
+! grep -q '^# BEGIN PAKGAT JOOD MULTICHANNEL$' main.py
 
 echo "===== 9. FINAL SAFETY STATE ====="
 rm -rf "$STAGE_DIR"
