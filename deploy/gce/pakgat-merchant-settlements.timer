@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare Pakgat merchant settlements every Thursday morning
+
+[Timer]
+OnCalendar=Thu *-*-* 05:00:00 UTC
+Persistent=true
+Unit=pakgat-merchant-settlements.service
+
+[Install]
+WantedBy=timers.target
