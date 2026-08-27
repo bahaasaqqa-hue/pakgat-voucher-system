@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app import application as core
-from app import merchant_finance as finance  # noqa: F401 - activates finance extension
+from app import merchant_finance_hooks  # noqa: F401 - activates finance policy hooks
 
 
 class MerchantNotificationPolicyTests(unittest.TestCase):
