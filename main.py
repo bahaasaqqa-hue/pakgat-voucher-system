@@ -49,6 +49,7 @@ from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
 from app import voucher_lifecycle_dashboard as _voucher_lifecycle_dashboard  # noqa: F401 - automatic expiry sweep + refund/expired value dashboard
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
-from app import admin_unified_theme as _admin_unified_theme  # noqa: F401 - final global admin visual shell, import LAST
+from app import admin_unified_theme as _admin_unified_theme  # noqa: F401 - final global admin visual shell
+from app import merchant_ui_cairo as _merchant_ui_cairo  # noqa: F401 - Cairo + Arabic finance presentation, load after unified theme
 
 __all__ = ["app"]
