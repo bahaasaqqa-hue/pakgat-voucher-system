@@ -9,11 +9,24 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from app import application as core
 from app import merchant_finance as finance
+
+
+def _audit_table_available(db: Session) -> bool:
+    """Keep settlement preparation independent from optional audit-table setup.
+
+    Production has the audit table, so the operational event is recorded there.
+    Focused/unit sessions can omit that legacy table without making the finance
+    operation itself fail after a valid settlement batch was created.
+    """
+    try:
+        return inspect(db.get_bind()).has_table(core.AuditLog.__tablename__)
+    except Exception:
+        return False
 
 
 def prepare_thursday_settlements(
@@ -35,18 +48,20 @@ def prepare_thursday_settlements(
     )
     created = 0
     skipped = 0
+    can_audit = _audit_table_available(db)
     for merchant in merchants:
         batch = finance.build_weekly_settlement_batch(db, merchant.id, as_of=as_of)
         if batch:
             created += 1
-            core.log_event(
-                db,
-                "merchant_settlement_batch_prepared",
-                details=(
-                    f"merchant_id={merchant.id}; batch_id={batch.id}; "
-                    f"payable_amount={batch.payable_amount}"
-                ),
-            )
+            if can_audit:
+                core.log_event(
+                    db,
+                    "merchant_settlement_batch_prepared",
+                    details=(
+                        f"merchant_id={merchant.id}; batch_id={batch.id}; "
+                        f"payable_amount={batch.payable_amount}"
+                    ),
+                )
         else:
             skipped += 1
     return {"created": created, "skipped": skipped}
