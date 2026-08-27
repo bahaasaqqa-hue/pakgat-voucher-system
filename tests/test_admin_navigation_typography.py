@@ -59,10 +59,13 @@ class AdminNavigationTypographyTests(unittest.TestCase):
         self.assertIn(".ua-nav-link.active{font-weight:600!important}", rendered)
         self.assertIn(".ua-nav-section-title{", rendered)
         self.assertIn("font-weight:700!important", rendered)
-        self.assertIn(".ua-content h1,.ua-content h2,.ua-content h3{font-weight:700!important}", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content h1,", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content h2,", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content h3{font-weight:700!important", rendered)
         self.assertIn(".ua-content th{font-weight:600!important}", rendered)
         self.assertIn(".ua-content td{font-weight:400!important}", rendered)
-        self.assertIn(".ua-content .btn,.ua-content button{font-weight:500!important}", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content .btn,", rendered)
+        self.assertIn("body[data-unified-admin-theme] .ua-content button{font-weight:500!important", rendered)
 
     def test_cairo_and_weight_hierarchy_apply_to_ai_company_pages(self):
         source = """<html><head></head><body data-unified-admin-theme='ai'>
@@ -71,9 +74,11 @@ class AdminNavigationTypographyTests(unittest.TestCase):
         </body></html>"""
         rendered = apply_merchant_ui_polish(source, "/admin/company")
         self.assertIn("family=Cairo", rendered)
-        self.assertIn("body[data-unified-admin-theme='ai'] .ai-nav a{font-weight:500!important}", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-nav a{font-size:13px!important;font-weight:500!important}", rendered)
         self.assertIn("body[data-unified-admin-theme='ai'] .ai-nav a.active{font-weight:600!important}", rendered)
-        self.assertIn("body[data-unified-admin-theme='ai'] .ai-workspace h1,body[data-unified-admin-theme='ai'] .ai-workspace h2,body[data-unified-admin-theme='ai'] .ai-workspace h3{font-weight:700!important}", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-workspace h1,", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-workspace h2,", rendered)
+        self.assertIn("body[data-unified-admin-theme='ai'] .ai-workspace h3{font-weight:700!important", rendered)
         self.assertIn("body[data-unified-admin-theme='ai'] .ai-workspace p{font-weight:400!important}", rendered)
 
     def test_finance_translation_scope_is_preserved(self):
