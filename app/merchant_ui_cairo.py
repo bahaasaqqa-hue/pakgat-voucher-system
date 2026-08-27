@@ -18,7 +18,10 @@ CAIRO_ADMIN_HEAD = r"""
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style id="pakgat-cairo-admin">
 body[data-unified-admin-theme],
-body[data-unified-admin-theme] button,input,select,textarea{
+body[data-unified-admin-theme] button,
+body[data-unified-admin-theme] input,
+body[data-unified-admin-theme] select,
+body[data-unified-admin-theme] textarea{
   font-family:'Cairo',Tahoma,Arial,sans-serif!important;
 }
 body[data-unified-admin-theme] .ua-top h1{font-weight:800!important;letter-spacing:0!important}
@@ -99,6 +102,11 @@ _TEXT_NODE_TRANSLATIONS = {
 _FINANCE_PATH_PREFIXES = ("/admin/merchants", "/admin/settlements")
 
 
+def _is_finance_path(path: str) -> bool:
+    clean = str(path or "")
+    return clean == "/admin" or any(clean.startswith(prefix) for prefix in _FINANCE_PATH_PREFIXES)
+
+
 def _translate_exact_text_nodes(source: str) -> str:
     rendered = source
     for original, translated in _TEXT_NODE_TRANSLATIONS.items():
@@ -108,8 +116,8 @@ def _translate_exact_text_nodes(source: str) -> str:
 
 
 def apply_merchant_ui_polish(source: str, path: str) -> str:
-    """Apply Cairo globally to admin HTML and Arabic finance labels on finance pages."""
-    if not str(path or "").startswith("/admin"):
+    """Apply Cairo and Arabic labels only to the approved finance/admin surfaces."""
+    if not _is_finance_path(path):
         return source
 
     rendered = str(source or "")
@@ -118,10 +126,6 @@ def apply_merchant_ui_polish(source: str, path: str) -> str:
             rendered = rendered.replace("</head>", CAIRO_ADMIN_HEAD + "</head>", 1)
         else:
             rendered = CAIRO_ADMIN_HEAD + rendered
-
-    is_finance_page = path == "/admin" or any(path.startswith(prefix) for prefix in _FINANCE_PATH_PREFIXES)
-    if not is_finance_page:
-        return rendered
 
     for original, translated in _PHRASE_TRANSLATIONS:
         rendered = rendered.replace(original, translated)
@@ -149,7 +153,7 @@ async def merchant_ui_cairo_middleware(request, call_next):
     response = await call_next(request)
     path = request.url.path
 
-    if not path.startswith("/admin") or request.method.upper() != "GET":
+    if not _is_finance_path(path) or request.method.upper() != "GET":
         return response
     if 300 <= response.status_code < 400:
         return response
