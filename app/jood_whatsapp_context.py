@@ -164,13 +164,21 @@ def merchant_campaign_choice_action(
         return None
 
     choice = " ".join(str(message or "").strip().split())
-    if choice not in {"1", "١"}:
-        return None
+    sends_approved_details = choice in {
+        "1",
+        "١",
+        "أرسلوا التفاصيل",
+        "ارسلوا التفاصيل",
+    }
 
     return MerchantCampaignChoiceAction(
-        reply=MERCHANT_CAMPAIGN_CHOICE_ONE_REPLY,
+        reply=MERCHANT_CAMPAIGN_CHOICE_ONE_REPLY if sends_approved_details else "",
         handoff_kind="merchant_partnership",
-        handoff_details="merchant_campaign_choice_1_ready_for_partnership_manager",
+        handoff_details=(
+            "merchant_campaign_details_shared_ready_for_partnership_manager"
+            if sends_approved_details
+            else "merchant_campaign_silent_human_takeover"
+        ),
         next_stage="handed_off",
     )
 

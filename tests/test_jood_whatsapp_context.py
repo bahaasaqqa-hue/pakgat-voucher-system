@@ -134,7 +134,57 @@ class JoodWhatsAppContextTests(unittest.TestCase):
         self.assertEqual(action.handoff_kind, "merchant_partnership")
         self.assertIn("مسؤول الشراكات في بكجات", action.reply)
 
-    def test_campaign_choice_action_does_not_hijack_questions_or_customers(self):
+    def test_button_details_returns_approved_sales_handoff_action(self):
+        row = remember_outreach_context(
+            self.db, 7, "merchant", "استقطاب التاجر إلى بكجات", "campaign"
+        )
+
+        action = whatsapp_context.merchant_campaign_choice_action(
+            "أرسلوا التفاصيل", "merchant", row
+        )
+
+        self.assertIsNotNone(action)
+        self.assertIn("أبشروا بالسعد 🙌", action.reply)
+        self.assertEqual(action.next_stage, "handed_off")
+
+    def test_button_question_silently_hands_conversation_to_human(self):
+        row = remember_outreach_context(
+            self.db, 7, "merchant", "استقطاب التاجر إلى بكجات", "campaign"
+        )
+
+        action = whatsapp_context.merchant_campaign_choice_action(
+            "لدي استفسار", "merchant", row
+        )
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.reply, "")
+        self.assertEqual(action.handoff_kind, "merchant_partnership")
+        self.assertEqual(action.next_stage, "handed_off")
+
+    def test_unexpected_merchant_message_silently_hands_conversation_to_human(self):
+        row = remember_outreach_context(
+            self.db, 7, "merchant", "استقطاب التاجر إلى بكجات", "campaign"
+        )
+
+        action = whatsapp_context.merchant_campaign_choice_action(
+            "ممكن تشرحون أكثر؟", "merchant", row
+        )
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.reply, "")
+        self.assertEqual(action.handoff_kind, "merchant_partnership")
+
+    def test_legacy_choice_two_silently_hands_conversation_to_human(self):
+        row = remember_outreach_context(
+            self.db, 7, "merchant", "استقطاب التاجر إلى بكجات", "campaign"
+        )
+
+        action = whatsapp_context.merchant_campaign_choice_action("2", "merchant", row)
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.reply, "")
+
+    def test_campaign_choice_action_does_not_hijack_customers(self):
         resolver = getattr(whatsapp_context, "merchant_campaign_choice_action", None)
         self.assertIsNotNone(resolver, "merchant campaign choice resolver is missing")
 
@@ -145,9 +195,7 @@ class JoodWhatsAppContextTests(unittest.TestCase):
             "استقطاب التاجر إلى بكجات",
             "campaign",
         )
-        self.assertIsNone(resolver("2", "merchant", campaign_row))
         self.assertIsNone(resolver("1", "customer", campaign_row))
-        self.assertIsNone(resolver("مرحبا", "merchant", campaign_row))
 
 
 if __name__ == "__main__":

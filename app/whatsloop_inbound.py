@@ -353,12 +353,15 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                 context_row,
             )
             if merchant_choice is not None:
-                ok, provider_status = await asyncio.to_thread(
-                    _send_jood_reply,
-                    normalized,
-                    merchant_choice.reply,
-                )
-                if ok:
+                ok = True
+                provider_status = "silent human handoff; no automatic reply"
+                if merchant_choice.reply:
+                    ok, provider_status = await asyncio.to_thread(
+                        _send_jood_reply,
+                        normalized,
+                        merchant_choice.reply,
+                    )
+                if ok and merchant_choice.reply:
                     append_turn(
                         db,
                         contact.id,
@@ -367,6 +370,7 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                         merchant_choice.reply,
                         conversation_key,
                     )
+                if ok:
                     create_handoff(
                         db,
                         contact.id,
@@ -382,7 +386,13 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                     )
                 core.log_event(
                     db,
-                    "jood_merchant_campaign_handoff_sent" if ok else "jood_merchant_campaign_handoff_failed",
+                    (
+                        "jood_merchant_campaign_handoff_sent"
+                        if ok and merchant_choice.reply
+                        else "jood_merchant_campaign_handoff_silent"
+                        if ok
+                        else "jood_merchant_campaign_handoff_failed"
+                    ),
                     details=(
                         f"contact_id={contact.id}; channel={normalized.channel_id or '-'}; "
                         f"provider={provider_status[:250]}"
@@ -393,7 +403,13 @@ async def whatsloop_webhook(token: str, request: Request, db: Session = Depends(
                         "success": True,
                         "duplicate": False,
                         "event_id": row.id,
-                        "jood_reply": "merchant_handoff_sent" if ok else "merchant_handoff_failed",
+                        "jood_reply": (
+                            "merchant_handoff_sent"
+                            if ok and merchant_choice.reply
+                            else "merchant_handoff_silent"
+                            if ok
+                            else "merchant_handoff_failed"
+                        ),
                     }
                 )
 
