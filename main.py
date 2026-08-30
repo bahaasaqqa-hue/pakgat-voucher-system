@@ -47,6 +47,7 @@ from app import merchant_finance as _merchant_finance  # noqa: F401 - merchant p
 from app import merchant_contracts as _merchant_contracts  # noqa: F401 - Sadq merchant contract lifecycle and delivery audit
 _merchant_contracts.ensure_merchant_contract_schema()
 from app import merchant_contract_admin_actions as _merchant_contract_admin_actions  # noqa: F401 - draft creation and immutable Pakgat approval
+_merchant_contracts.merchant_contract_summary_html = _merchant_contract_admin_actions.merchant_contract_summary_html
 from app import merchant_portal as _merchant_portal  # noqa: F401 - public merchant WhatsApp OTP portal
 _merchant_portal.ensure_merchant_portal_schema()
 from app import merchant_finance_hooks as _merchant_finance_hooks  # noqa: F401 - refund/cancel, payable and API-security policy hooks
