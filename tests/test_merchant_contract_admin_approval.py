@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from app import application as core
 from app import merchant_contracts as contracts
-from app import merchant_contract_admin_actions as _merchant_contract_admin_actions  # noqa: F401
+from app import merchant_contract_admin_actions as actions
 from app import merchant_finance as finance
 
 
@@ -61,12 +61,12 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
         self.assertIn("/admin/merchants/{merchant_id}/contracts/{contract_id}/approve", paths)
 
     def test_no_contract_summary_offers_create_draft(self):
-        html = contracts.merchant_contract_summary_html(self.db, self.merchant.id)
+        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
         self.assertIn("إنشاء مسودة عقد", html)
         self.assertIn(f"/admin/merchants/{self.merchant.id}/contracts/create-draft", html)
 
     def test_create_draft_requires_admin_auth(self):
-        response = contracts.admin_create_contract_draft(
+        response = actions.admin_create_contract_draft(
             self.merchant.id,
             self._request("/create"),
             self.db,
@@ -83,7 +83,7 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
 
     def test_create_draft_then_summary_offers_pakgat_approval(self):
         with patch.object(contracts.core, "require_admin", return_value=None):
-            response = contracts.admin_create_contract_draft(
+            response = actions.admin_create_contract_draft(
                 self.merchant.id,
                 self._request("/create"),
                 self.db,
@@ -98,7 +98,7 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
         self.assertEqual(contract.status, "draft")
         self.assertIsNone(contract.agreement_number)
 
-        html = contracts.merchant_contract_summary_html(self.db, self.merchant.id)
+        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
         self.assertIn("اعتماد العقد من Pakgat", html)
         self.assertIn(
             f"/admin/merchants/{self.merchant.id}/contracts/{contract.id}/approve",
@@ -111,7 +111,7 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
         self.db.commit()
 
         with patch.object(contracts.core, "require_admin", return_value=None):
-            response = contracts.admin_approve_contract(
+            response = actions.admin_approve_contract(
                 self.merchant.id,
                 contract.id,
                 self._request("/approve"),
@@ -128,7 +128,7 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
             )
         )
         self.assertIsNotNone(approval)
-        html = contracts.merchant_contract_summary_html(self.db, self.merchant.id)
+        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
         self.assertIn("بهاء السقا", html)
         self.assertIn("مدير تطوير الأعمال", html)
         self.assertIn("اعتماد Pakgat", html)
