@@ -82,11 +82,32 @@ class MerchantContract(core.Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     merchant_id: Mapped[int] = mapped_column(Integer, index=True)
+    agreement_number: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, unique=True, index=True)
     status: Mapped[str] = mapped_column(String(40), default="draft", index=True)
     sadq_document_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     sadq_transaction_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     signed_document_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
+
+
+class MerchantContractDelivery(core.Base):
+    __tablename__ = "merchant_contract_deliveries"
+    __table_args__ = (
+        UniqueConstraint("merchant_contract_id", "channel", name="uq_contract_delivery_channel"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    merchant_contract_id: Mapped[int] = mapped_column(Integer, index=True)
+    merchant_id: Mapped[int] = mapped_column(Integer, index=True)
+    channel: Mapped[str] = mapped_column(String(30), default="whatsapp", index=True)
+    destination: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    provider_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
 
@@ -173,6 +194,7 @@ FINANCE_TABLES = [
     Merchant.__table__,
     MerchantProductLink.__table__,
     MerchantContract.__table__,
+    MerchantContractDelivery.__table__,
     MerchantNote.__table__,
     VoucherFinancialSnapshot.__table__,
     MerchantPayable.__table__,
@@ -184,6 +206,33 @@ FINANCE_TABLES = [
 def ensure_merchant_finance_schema() -> None:
     """Create only new additive finance tables; never mutate legacy tables."""
     core.Base.metadata.create_all(bind=core.engine, tables=FINANCE_TABLES)
+
+
+def next_agreement_number(db: Session, when: Optional[datetime] = None) -> str:
+    """Return the next immutable Pakgat merchant-agreement number for a Riyadh month."""
+    current = when or core.now_utc()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(RIYADH_TZ)
+    prefix = f"PKG-MA-{current.year:04d}-{current.month:02d}-"
+    values = list(
+        db.scalars(
+            select(MerchantContract.agreement_number).where(
+                MerchantContract.agreement_number.like(prefix + "%")
+            )
+        ).all()
+    )
+    highest = 0
+    for value in values:
+        raw = str(value or "")
+        if not raw.startswith(prefix):
+            continue
+        suffix = raw[len(prefix):]
+        if len(suffix) == 4 and suffix.isdigit():
+            highest = max(highest, int(suffix))
+    if highest >= 9999:
+        raise RuntimeError("Monthly merchant agreement sequence exhausted")
+    return f"{prefix}{highest + 1:04d}"
 
 
 def _new_merchant_code(db: Session) -> str:
@@ -842,12 +891,14 @@ __all__ = [
     "Merchant",
     "MerchantProductLink",
     "MerchantContract",
+    "MerchantContractDelivery",
     "MerchantNote",
     "VoucherFinancialSnapshot",
     "MerchantPayable",
     "SettlementBatch",
     "SettlementPayment",
     "ensure_merchant_finance_schema",
+    "next_agreement_number",
     "backfill_local_partners",
     "capture_voucher_financial_snapshot",
     "ensure_payable_for_redeemed_voucher",
