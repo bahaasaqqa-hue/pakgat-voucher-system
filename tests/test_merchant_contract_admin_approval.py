@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("MERCHANT_PORTAL_SECRET", "test-only-merchant-portal-secret")
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from app import application as core
 from app import merchant_contracts as contracts
 from app import merchant_contract_admin_actions as actions
 from app import merchant_finance as finance
+from app import merchant_onboarding as onboarding
 
 
 class MerchantContractAdminApprovalTests(unittest.TestCase):
@@ -22,6 +24,8 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
         for table in finance.FINANCE_TABLES:
             table.create(self.engine)
         contracts.ensure_merchant_contract_schema(self.engine)
+        for table in onboarding.ONBOARDING_TABLES:
+            table.create(self.engine, checkfirst=True)
         self.db = Session(self.engine)
         self.merchant = finance.Merchant(
             code="PKG-M-ADMIN-APPROVAL",
@@ -31,6 +35,18 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
             status="pending",
         )
         self.db.add(self.merchant)
+        self.db.flush()
+        self.application = onboarding.MerchantOnboardingApplication(
+            merchant_id=self.merchant.id,
+            status="pending_review",
+        )
+        self.contract = finance.MerchantContract(
+            merchant_id=self.merchant.id,
+            agreement_number="PKG-MA-2026-08-0200",
+            status="signed",
+            signed_at=core.now_utc(),
+        )
+        self.db.add_all([self.application, self.contract])
         self.db.commit()
 
     def tearDown(self):
@@ -38,100 +54,70 @@ class MerchantContractAdminApprovalTests(unittest.TestCase):
         self.engine.dispose()
 
     def _request(self, path, method="POST"):
-        return Request(
-            {
-                "type": "http",
-                "method": method,
-                "path": path,
-                "headers": [],
-                "query_string": b"",
-                "scheme": "https",
-                "server": ("example.test", 443),
-                "client": ("127.0.0.1", 12345),
-            }
-        )
+        return Request({
+            "type": "http", "method": method, "path": path, "headers": [],
+            "query_string": b"", "scheme": "https", "server": ("example.test", 443),
+            "client": ("127.0.0.1", 12345),
+        })
 
-    def test_create_and_approve_routes_are_registered(self):
+    def test_only_post_sadq_review_routes_are_registered(self):
         paths = {
             getattr(route, "path", "")
             for route in core.app.routes
             if "POST" in (getattr(route, "methods", set()) or set())
         }
-        self.assertIn("/admin/merchants/{merchant_id}/contracts/create-draft", paths)
-        self.assertIn("/admin/merchants/{merchant_id}/contracts/{contract_id}/approve", paths)
+        self.assertIn("/admin/merchants/{merchant_id}/contracts/{contract_id}/approve-onboarding", paths)
+        self.assertIn("/admin/merchants/{merchant_id}/onboarding/request-changes", paths)
+        self.assertIn("/admin/merchants/{merchant_id}/onboarding/reject", paths)
+        self.assertNotIn("/admin/merchants/{merchant_id}/contracts/create-draft", paths)
+        self.assertNotIn("/admin/merchants/{merchant_id}/contracts/{contract_id}/approve", paths)
 
-    def test_no_contract_summary_offers_create_draft(self):
+    def test_summary_offers_review_actions_only_after_signed(self):
         html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
-        self.assertIn("إنشاء مسودة عقد", html)
-        self.assertIn(f"/admin/merchants/{self.merchant.id}/contracts/create-draft", html)
+        self.assertIn("بانتظار مراجعة Pakgat", html)
+        self.assertIn("اعتماد التاجر", html)
+        self.assertIn("طلب استكمال", html)
+        self.assertIn("رفض الطلب", html)
+        self.assertNotIn("إنشاء مسودة عقد", html)
+        self.assertNotIn("اعتماد العقد من Pakgat", html)
 
-    def test_create_draft_requires_admin_auth(self):
-        response = actions.admin_create_contract_draft(
+        self.contract.status = "sadq_pending"
+        self.application.status = "sadq_pending"
+        self.db.commit()
+        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
+        self.assertNotIn("اعتماد التاجر", html)
+
+    def test_approve_route_requires_admin_auth(self):
+        response = actions.admin_approve_onboarding(
             self.merchant.id,
-            self._request("/create"),
+            self.contract.id,
+            self._request("/approve"),
             self.db,
         )
         self.assertEqual(response.status_code, 303)
         self.assertIn("/admin/login", response.headers["location"])
-        self.assertIsNone(
-            self.db.scalar(
-                select(finance.MerchantContract).where(
-                    finance.MerchantContract.merchant_id == self.merchant.id
-                )
-            )
-        )
+        self.db.refresh(self.merchant)
+        self.assertEqual(self.merchant.status, "pending")
 
-    def test_create_draft_then_summary_offers_pakgat_approval(self):
+    def test_admin_approval_after_sadq_activates_merchant_and_records_signer(self):
         with patch.object(contracts.core, "require_admin", return_value=None):
-            response = actions.admin_create_contract_draft(
+            response = actions.admin_approve_onboarding(
                 self.merchant.id,
-                self._request("/create"),
-                self.db,
-            )
-        self.assertEqual(response.status_code, 303)
-        contract = self.db.scalar(
-            select(finance.MerchantContract).where(
-                finance.MerchantContract.merchant_id == self.merchant.id
-            )
-        )
-        self.assertIsNotNone(contract)
-        self.assertEqual(contract.status, "draft")
-        self.assertIsNone(contract.agreement_number)
-
-        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
-        self.assertIn("اعتماد العقد من Pakgat", html)
-        self.assertIn(
-            f"/admin/merchants/{self.merchant.id}/contracts/{contract.id}/approve",
-            html,
-        )
-
-    def test_admin_approval_freezes_contract_and_shows_pakgat_signer(self):
-        contract = finance.MerchantContract(merchant_id=self.merchant.id, status="draft")
-        self.db.add(contract)
-        self.db.commit()
-
-        with patch.object(contracts.core, "require_admin", return_value=None):
-            response = actions.admin_approve_contract(
-                self.merchant.id,
-                contract.id,
+                self.contract.id,
                 self._request("/approve"),
                 self.db,
             )
         self.assertEqual(response.status_code, 303)
-        self.db.refresh(contract)
-        self.assertEqual(contract.status, "approved_internal")
-        self.assertIsNotNone(contract.agreement_number)
-
-        approval = self.db.scalar(
-            select(contracts.MerchantContractApproval).where(
-                contracts.MerchantContractApproval.merchant_contract_id == contract.id
-            )
-        )
+        self.db.refresh(self.contract)
+        self.db.refresh(self.merchant)
+        self.db.refresh(self.application)
+        self.assertEqual(self.contract.status, "approved")
+        self.assertEqual(self.merchant.status, "active")
+        self.assertEqual(self.application.status, "approved")
+        approval = self.db.scalar(select(contracts.MerchantContractApproval).where(contracts.MerchantContractApproval.merchant_contract_id == self.contract.id))
         self.assertIsNotNone(approval)
-        html = actions.merchant_contract_summary_html(self.db, self.merchant.id)
-        self.assertIn("بهاء السقا", html)
-        self.assertIn("مدير تطوير الأعمال", html)
-        self.assertIn("اعتماد Pakgat", html)
+        self.assertEqual(approval.pakgat_signer_name, "بهاء السقا")
+        self.assertEqual(approval.pakgat_signer_title, "مدير تطوير الأعمال")
 
 
 if __name__ == "__main__":
