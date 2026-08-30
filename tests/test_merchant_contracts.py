@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import application as core
 from app import merchant_finance as finance
+from app import merchant_contracts as contracts
 
 
 class MerchantContractStorageTests(unittest.TestCase):
@@ -106,7 +107,7 @@ class MerchantContractStorageTests(unittest.TestCase):
                         updated_at DATETIME
                     )
                 """))
-            finance.ensure_merchant_contract_schema(legacy_engine)
+            contracts.ensure_merchant_contract_schema(legacy_engine)
             columns = {column["name"] for column in inspect(legacy_engine).get_columns("merchant_contracts")}
             self.assertIn("agreement_number", columns)
             tables = set(inspect(legacy_engine).get_table_names())
