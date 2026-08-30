@@ -23,6 +23,15 @@ def _is_signed_transition(contract: finance.MerchantContract, session: Session) 
     return bool(sa_inspect(contract).attrs.status.history.has_changes())
 
 
+def _onboarding_schema_available(session: Session) -> bool:
+    """Return whether this Session's database has the onboarding application table."""
+    try:
+        bind = session.get_bind()
+        return bool(sa_inspect(bind).has_table(onboarding.MerchantOnboardingApplication.__tablename__))
+    except Exception:
+        return False
+
+
 def _sync_one(session: Session, contract: finance.MerchantContract) -> None:
     with session.no_autoflush:
         application = session.scalar(
@@ -49,9 +58,15 @@ def _sync_one(session: Session, contract: finance.MerchantContract) -> None:
 def sync_signed_contract_to_onboarding(session: Session, flush_context, instances) -> None:
     """Move a signed onboarding contract to Pakgat review in the same DB commit."""
     _ = flush_context, instances
-    for obj in list(session.new) + list(session.dirty):
-        if isinstance(obj, finance.MerchantContract) and _is_signed_transition(obj, session):
-            _sync_one(session, obj)
+    candidates = [
+        obj
+        for obj in list(session.new) + list(session.dirty)
+        if isinstance(obj, finance.MerchantContract) and _is_signed_transition(obj, session)
+    ]
+    if not candidates or not _onboarding_schema_available(session):
+        return
+    for contract in candidates:
+        _sync_one(session, contract)
 
 
 __all__ = ["sync_signed_contract_to_onboarding"]
