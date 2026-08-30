@@ -1,8 +1,8 @@
 """Bridge Sadq contract completion into the self-service onboarding lifecycle.
 
-The existing Sadq webhook owns contract state.  This additive SQLAlchemy hook
+The existing Sadq webhook owns contract state. This additive SQLAlchemy hook
 observes only a transition to ``signed`` and moves the corresponding onboarding
-application to Pakgat review.  It never activates a merchant.
+application to Pakgat review. It never activates a merchant.
 """
 
 from __future__ import annotations
@@ -15,21 +15,12 @@ from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
 
 
-def _contract_just_became_signed(contract: finance.MerchantContract) -> bool:
-    if contract.status != "signed":
-        return False
-    state = sa_inspect(contract)
-    history = state.attrs.status.history
-    return contract in state.session.new if state.session is not None else False
-
-
 def _is_signed_transition(contract: finance.MerchantContract, session: Session) -> bool:
     if contract.status != "signed":
         return False
     if contract in session.new:
         return True
-    history = sa_inspect(contract).attrs.status.history
-    return bool(history.has_changes())
+    return bool(sa_inspect(contract).attrs.status.history.has_changes())
 
 
 def _sync_one(session: Session, contract: finance.MerchantContract) -> None:
@@ -58,8 +49,7 @@ def _sync_one(session: Session, contract: finance.MerchantContract) -> None:
 def sync_signed_contract_to_onboarding(session: Session, flush_context, instances) -> None:
     """Move a signed onboarding contract to Pakgat review in the same DB commit."""
     _ = flush_context, instances
-    candidates = list(session.new) + list(session.dirty)
-    for obj in candidates:
+    for obj in list(session.new) + list(session.dirty):
         if isinstance(obj, finance.MerchantContract) and _is_signed_transition(obj, session):
             _sync_one(session, obj)
 
