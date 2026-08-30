@@ -16,6 +16,7 @@ from urllib.parse import quote
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
@@ -289,8 +290,6 @@ def deliver_signed_contract(
         )
         if not text_ok:
             return _fail_delivery(db, delivery, "whatsloop_text_failed")
-        # Existing WhatsLoop text helper returns a safe HTTP summary rather than a
-        # provider message id. This sentinel prevents duplicate completion texts.
         delivery.provider_message_id = "text_sent"
         delivery.updated_at = core.now_utc()
         db.flush()
@@ -316,6 +315,108 @@ def deliver_signed_contract(
     db.commit()
     db.refresh(delivery)
     return delivery
+
+
+def _admin_guard(request: Request):
+    try:
+        core.require_admin(request)
+    except HTTPException:
+        return RedirectResponse("/admin/login", status_code=303)
+    return None
+
+
+def _latest_merchant_contract(
+    db: Session,
+    merchant_id: int,
+) -> Optional[finance.MerchantContract]:
+    return db.scalar(
+        select(finance.MerchantContract)
+        .where(finance.MerchantContract.merchant_id == merchant_id)
+        .order_by(finance.MerchantContract.created_at.desc())
+        .limit(1)
+    )
+
+
+def _contract_delivery(
+    db: Session,
+    contract_id: int,
+) -> Optional[finance.MerchantContractDelivery]:
+    return db.scalar(
+        select(finance.MerchantContractDelivery)
+        .where(
+            finance.MerchantContractDelivery.merchant_contract_id == contract_id,
+            finance.MerchantContractDelivery.channel == "whatsapp",
+        )
+        .limit(1)
+    )
+
+
+def merchant_contract_summary_html(db: Session, merchant_id: int) -> str:
+    """Render safe contract/Sadq/WhatsApp audit data for the existing merchant page."""
+    contract = _latest_merchant_contract(db, merchant_id)
+    if contract is None:
+        return (
+            "<section id='merchant-contract-summary' class='card' "
+            "style='padding:18px;margin-bottom:18px'>"
+            "<h2>اتفاقية الشراكة</h2>"
+            "<p class='muted'>لا توجد اتفاقية شراكة مرتبطة بهذا التاجر بعد.</p>"
+            "</section>"
+        )
+
+    delivery = _contract_delivery(db, contract.id)
+    delivery_status = delivery.status if delivery else "لم تبدأ"
+    attempts = int(delivery.attempt_count or 0) if delivery else 0
+    destination = delivery.destination if delivery else "—"
+    last_error = delivery.last_error if delivery else "—"
+    sent_at = delivery.sent_at if delivery else None
+    retry_html = ""
+    if contract.status == "signed" and (delivery is None or delivery.status != "sent"):
+        retry_html = (
+            f"<form method='post' action='/admin/merchants/{merchant_id}/contracts/{contract.id}/retry-whatsapp' "
+            "style='margin-top:14px'>"
+            "<button class='btn btn-blue' type='submit'>إعادة إرسال نسخة العقد</button>"
+            "</form>"
+        )
+
+    return f"""
+    <section id='merchant-contract-summary' class='card' style='padding:18px;margin-bottom:18px'>
+      <h2>اتفاقية الشراكة</h2>
+      <div class='grid grid-mobile-1' style='grid-template-columns:repeat(2,1fr);gap:10px'>
+        <p><strong>رقم الاتفاقية:</strong> <span dir='ltr'>{core.esc(contract.agreement_number or '—')}</span></p>
+        <p><strong>حالة العقد:</strong> {core.esc(contract.status)}</p>
+        <p><strong>Sadq Document ID:</strong> <span dir='ltr'>{core.esc(contract.sadq_document_id or '—')}</span></p>
+        <p><strong>Sadq Request ID:</strong> <span dir='ltr'>{core.esc(contract.sadq_transaction_id or '—')}</span></p>
+        <p><strong>تاريخ التوقيع:</strong> {core.fmt_dt(contract.signed_at)}</p>
+        <p><strong>حالة إرسال نسخة العقد:</strong> {core.esc(delivery_status)}</p>
+        <p><strong>رقم الواتساب:</strong> <span dir='ltr'>{core.esc(destination or '—')}</span></p>
+        <p><strong>عدد محاولات الإرسال:</strong> {attempts}</p>
+        <p><strong>آخر إرسال ناجح:</strong> {core.fmt_dt(sent_at)}</p>
+        <p><strong>آخر خطأ:</strong> <span dir='ltr'>{core.esc(last_error or '—')}</span></p>
+      </div>
+      <p class='muted' style='margin-bottom:0'>التوقيع يتم عبر صادق، والتحقق من هوية الموقّع يتم عبر نفاذ ضمن رحلة التوقيع المفعلة للعقد.</p>
+      {retry_html}
+    </section>
+    """
+
+
+@core.app.post("/admin/merchants/{merchant_id}/contracts/{contract_id}/retry-whatsapp")
+def admin_retry_contract_whatsapp(
+    merchant_id: int,
+    contract_id: int,
+    request: Request,
+    db: Session = Depends(core.get_db),
+):
+    """Retry the existing WhatsApp delivery audit row for a signed contract."""
+    redirect = _admin_guard(request)
+    if redirect:
+        return redirect
+    contract = db.get(finance.MerchantContract, contract_id)
+    if contract is None or contract.merchant_id != merchant_id:
+        raise HTTPException(status_code=404, detail="Merchant contract not found")
+    if contract.status != "signed":
+        raise HTTPException(status_code=409, detail="Only signed contracts can be resent")
+    deliver_signed_contract(db, contract)
+    return RedirectResponse(f"/admin/merchants/{merchant_id}", status_code=303)
 
 
 @core.app.post("/integrations/sadq/webhook")
@@ -372,8 +473,6 @@ async def sadq_webhook(request: Request, db: Session = Depends(core.get_db)):
         try:
             deliver_signed_contract(db, contract)
         except Exception:
-            # Sadq completion remains authoritative. Admin retry can safely resume
-            # delivery later even if the provider notification path has an outage.
             db.rollback()
 
     return {
@@ -393,5 +492,7 @@ __all__ = [
     "extract_sadq_callback",
     "download_signed_sadq_pdf",
     "deliver_signed_contract",
+    "merchant_contract_summary_html",
+    "admin_retry_contract_whatsapp",
     "sadq_webhook",
 ]
