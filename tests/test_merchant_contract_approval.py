@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app import application as core
@@ -20,6 +20,7 @@ class MerchantContractApprovalTests(unittest.TestCase):
         core.AuditLog.__table__.create(self.engine)
         for table in finance.FINANCE_TABLES:
             table.create(self.engine)
+        contracts.ensure_merchant_contract_schema(self.engine)
         self.db = Session(self.engine)
         self.merchant = finance.Merchant(
             code="PKG-M-APPROVAL",
@@ -46,9 +47,13 @@ class MerchantContractApprovalTests(unittest.TestCase):
         self.db.close()
         self.engine.dispose()
 
-    def test_contract_model_has_internal_approval_snapshot_fields(self):
-        columns = finance.MerchantContract.__table__.c
+    def test_approval_audit_model_has_required_snapshot_fields(self):
+        self.assertTrue(hasattr(contracts, "MerchantContractApproval"))
+        columns = contracts.MerchantContractApproval.__table__.c
         for name in (
+            "merchant_contract_id",
+            "merchant_id",
+            "agreement_number_snapshot",
             "approved_at",
             "pakgat_signer_name",
             "pakgat_signer_title",
@@ -61,7 +66,7 @@ class MerchantContractApprovalTests(unittest.TestCase):
     def test_approve_contract_records_pakgat_approval_without_activating_merchant(self):
         approved_at = datetime(2026, 8, 30, 18, 45, tzinfo=timezone.utc)
 
-        result = contracts.approve_contract(
+        approval = contracts.approve_contract(
             self.db,
             self.contract,
             approved_at=approved_at,
@@ -69,26 +74,27 @@ class MerchantContractApprovalTests(unittest.TestCase):
 
         self.db.refresh(self.contract)
         self.db.refresh(self.merchant)
-        self.assertEqual(result.id, self.contract.id)
+        self.assertEqual(approval.merchant_contract_id, self.contract.id)
         self.assertEqual(self.contract.status, "approved_internal")
         self.assertEqual(self.contract.agreement_number, "PKG-MA-2026-08-0001")
-        self.assertEqual(self.contract.approved_at.replace(tzinfo=timezone.utc), approved_at)
-        self.assertEqual(self.contract.pakgat_signer_name, "بهاء السقا")
-        self.assertEqual(self.contract.pakgat_signer_title, "مدير تطوير الأعمال")
-        self.assertEqual(self.contract.pakgat_signer_phone, "0504161514")
+        self.assertEqual(approval.agreement_number_snapshot, self.contract.agreement_number)
+        self.assertEqual(approval.approved_at.replace(tzinfo=timezone.utc), approved_at)
+        self.assertEqual(approval.pakgat_signer_name, "بهاء السقا")
+        self.assertEqual(approval.pakgat_signer_title, "مدير تطوير الأعمال")
+        self.assertEqual(approval.pakgat_signer_phone, "0504161514")
         self.assertEqual(self.merchant.status, "pending")
 
     def test_approval_snapshot_does_not_change_when_merchant_profile_changes(self):
         approved_at = datetime(2026, 8, 30, 18, 45, tzinfo=timezone.utc)
-        contracts.approve_contract(self.db, self.contract, approved_at=approved_at)
-        snapshot_before = json.loads(self.contract.merchant_snapshot_json)
+        approval = contracts.approve_contract(self.db, self.contract, approved_at=approved_at)
+        snapshot_before = json.loads(approval.merchant_snapshot_json)
 
         self.merchant.legal_name = "اسم قانوني معدل لاحقًا"
         self.merchant.iban = "SA9999999999999999999999"
         self.db.commit()
-        self.db.refresh(self.contract)
+        self.db.refresh(approval)
 
-        snapshot_after = json.loads(self.contract.merchant_snapshot_json)
+        snapshot_after = json.loads(approval.merchant_snapshot_json)
         self.assertEqual(snapshot_before, snapshot_after)
         self.assertEqual(snapshot_after["legal_name"], "تام العاصمة للتجارة")
         self.assertEqual(snapshot_after["iban"], "SA0012345678901234567890")
@@ -97,16 +103,25 @@ class MerchantContractApprovalTests(unittest.TestCase):
         first_time = datetime(2026, 8, 30, 18, 45, tzinfo=timezone.utc)
         later_time = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
 
-        contracts.approve_contract(self.db, self.contract, approved_at=first_time)
+        first = contracts.approve_contract(self.db, self.contract, approved_at=first_time)
         first_number = self.contract.agreement_number
-        first_snapshot = self.contract.merchant_snapshot_json
+        first_snapshot = first.merchant_snapshot_json
 
-        contracts.approve_contract(self.db, self.contract, approved_at=later_time)
+        second = contracts.approve_contract(self.db, self.contract, approved_at=later_time)
         self.db.refresh(self.contract)
 
+        self.assertEqual(second.id, first.id)
         self.assertEqual(self.contract.agreement_number, first_number)
-        self.assertEqual(self.contract.approved_at.replace(tzinfo=timezone.utc), first_time)
-        self.assertEqual(self.contract.merchant_snapshot_json, first_snapshot)
+        self.assertEqual(second.approved_at.replace(tzinfo=timezone.utc), first_time)
+        self.assertEqual(second.merchant_snapshot_json, first_snapshot)
+        count = len(
+            self.db.scalars(
+                select(contracts.MerchantContractApproval).where(
+                    contracts.MerchantContractApproval.merchant_contract_id == self.contract.id
+                )
+            ).all()
+        )
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":
