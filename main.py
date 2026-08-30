@@ -52,6 +52,7 @@ from app import merchant_portal as _merchant_portal  # noqa: F401 - public merch
 _merchant_portal.ensure_merchant_portal_schema()
 from app import merchant_onboarding as _merchant_onboarding  # noqa: F401 - self-service merchant registration, documents and review lifecycle
 _merchant_onboarding.ensure_merchant_onboarding_schema()
+from app import merchant_onboarding_ui as _merchant_onboarding_ui  # noqa: F401 - friendly partner registration presentation
 from app import merchant_onboarding_sadq_bridge as _merchant_onboarding_sadq_bridge  # noqa: F401 - signed Sadq contracts become pending Pakgat review
 from app import merchant_finance_hooks as _merchant_finance_hooks  # noqa: F401 - refund/cancel, payable and API-security policy hooks
 from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 - merchant legal, VAT, contact and bank profile editing
