@@ -1,0 +1,1 @@
+RED phase: storage expectations committed before production implementation. CI on the feature PR is expected to fail until Task 1 production code is added.
