@@ -44,6 +44,8 @@ from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operati
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
 from app import merchant_finance as _merchant_finance  # noqa: F401 - merchant profiles, product commissions and weekly settlements
+from app import merchant_contracts as _merchant_contracts  # noqa: F401 - Sadq merchant contract lifecycle and delivery audit
+_merchant_contracts.ensure_merchant_contract_schema()
 from app import merchant_finance_hooks as _merchant_finance_hooks  # noqa: F401 - refund/cancel, payable and API-security policy hooks
 from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 - merchant legal, VAT, contact and bank profile editing
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
