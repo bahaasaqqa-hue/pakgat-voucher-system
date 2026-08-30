@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import application as core
 from app import merchant_finance as finance
+from app import merchant_contracts as contracts
 
 
 def _guard(request: Request):
@@ -141,8 +142,8 @@ async def admin_save_merchant_profile(
     return RedirectResponse(f"/admin/merchants/{merchant.id}", status_code=303)
 
 
-# Add a small edit action to the existing merchant detail page without changing
-# its calculations or tables.
+# Add editing and contract visibility to the existing merchant detail page without
+# changing its finance calculations or tables.
 _original_detail = finance.admin_merchant_detail
 
 
@@ -155,13 +156,23 @@ def _merchant_detail_with_edit(
     if not isinstance(response, HTMLResponse) or response.status_code >= 300:
         return response
     html = response.body.decode("utf-8", errors="replace")
-    marker = f"<div class='muted' dir='ltr'>"
+    marker = "<div class='muted' dir='ltr'>"
     button = f"<a class='btn btn-blue' href='/admin/merchants/{merchant_id}/edit' style='margin-top:10px'>تعديل بيانات التاجر</a>"
     if button not in html and marker in html:
         position = html.find("</div>", html.find(marker))
         if position != -1:
             position += len("</div>")
             html = html[:position] + button + html[position:]
+
+    if "id='merchant-contract-summary'" not in html:
+        summary = contracts.merchant_contract_summary_html(db, merchant_id)
+        products_marker = "<section class='card' style='padding:18px;margin-bottom:18px'><h2>المنتجات</h2>"
+        position = html.find(products_marker)
+        if position == -1:
+            position = html.rfind("</main>")
+        if position != -1:
+            html = html[:position] + summary + html[position:]
+
     return HTMLResponse(html, status_code=response.status_code, headers=dict(response.headers))
 
 
