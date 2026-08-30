@@ -13,16 +13,20 @@ from starlette.requests import Request
 from app import application as core
 from app import merchant_contracts as contracts
 from app import merchant_finance as finance
+from app import merchant_onboarding as onboarding
 from app import merchant_profile_admin as profile_admin
 
 
 class MerchantContractAdminTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
-        core.Voucher.__table__.create(self.engine)
-        core.AuditLog.__table__.create(self.engine)
+        core.Voucher.__table__.create(self.engine, checkfirst=True)
+        core.AuditLog.__table__.create(self.engine, checkfirst=True)
         for table in finance.FINANCE_TABLES:
-            table.create(self.engine)
+            table.create(self.engine, checkfirst=True)
+        contracts.MerchantContractApproval.__table__.create(self.engine, checkfirst=True)
+        for table in onboarding.ONBOARDING_TABLES:
+            table.create(self.engine, checkfirst=True)
         self.db = Session(self.engine)
         self.merchant = finance.Merchant(
             code="PKG-M-ADMIN",
