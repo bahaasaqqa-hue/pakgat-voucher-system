@@ -1,8 +1,8 @@
 """Merchant contract integration helpers.
 
-This module owns additive schema upgrades and Sadq contract lifecycle state.
-It deliberately does not alter voucher, settlement, or merchant activation
-logic.
+This module owns additive schema upgrades, Sadq contract lifecycle state, and
+signed-contract delivery audit. It deliberately does not alter voucher,
+settlement, or merchant activation logic.
 """
 
 from __future__ import annotations
@@ -11,6 +11,9 @@ import hmac
 import os
 from dataclasses import dataclass
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Engine, inspect, select, text
@@ -18,10 +21,13 @@ from sqlalchemy.orm import Session
 
 from app import application as core
 from app import merchant_finance as finance
+from app.jood_outbound import _send_whatsloop_text
 
 
 AGREEMENT_NUMBER_INDEX = "uq_merchant_contracts_agreement_number"
 SADQ_WEBHOOK_TOKEN = os.getenv("SADQ_WEBHOOK_TOKEN", "").strip()
+SADQ_API_BASE_URL = os.getenv("SADQ_API_BASE_URL", "https://sandbox-api.sadq-sa.com").rstrip("/")
+SADQ_BEARER_TOKEN = os.getenv("SADQ_BEARER_TOKEN", "").strip()
 
 
 @dataclass(frozen=True)
@@ -154,6 +160,164 @@ def _contract_note_text(contract: finance.MerchantContract, status: str) -> str:
     return f"تم تحديث حالة {agreement} في صادق إلى {labels.get(status, status)}."
 
 
+def download_signed_sadq_pdf(document_id: str) -> tuple[bool, Optional[bytes], str]:
+    """Download the final signed Sadq PDF without exposing provider credentials."""
+    clean_document_id = str(document_id or "").strip()
+    if not clean_document_id:
+        return False, None, "sadq_document_id_missing"
+    if not SADQ_BEARER_TOKEN:
+        return False, None, "sadq_bearer_token_missing"
+
+    url = f"{SADQ_API_BASE_URL}/api/v1/documents/{quote(clean_document_id, safe='')}/signed"
+    provider_request = UrlRequest(
+        url,
+        headers={
+            "Authorization": f"Bearer {SADQ_BEARER_TOKEN}",
+            "Accept": "application/pdf",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(provider_request, timeout=30) as response:
+            status = int(getattr(response, "status", response.getcode()))
+            content = response.read()
+        if not 200 <= status < 300:
+            return False, None, f"sadq_http_{status}"
+        if not content:
+            return False, None, "sadq_signed_pdf_empty"
+        if not content.startswith(b"%PDF"):
+            return False, None, "sadq_signed_document_not_pdf"
+        return True, content, ""
+    except HTTPError as exc:
+        return False, None, f"sadq_http_{int(getattr(exc, 'code', 0) or 0)}"
+    except URLError:
+        return False, None, "sadq_network_error"
+    except Exception:
+        return False, None, "sadq_download_error"
+
+
+def _send_whatsloop_document(
+    phone: str,
+    pdf_content: bytes,
+    filename: str,
+) -> tuple[bool, str]:
+    """Document adapter intentionally fails closed until WhatsLoop send-file API is documented."""
+    _ = phone, pdf_content, filename
+    return False, "whatsloop_document_sender_not_configured"
+
+
+def _delivery_message(agreement_number: str) -> str:
+    return (
+        "تم توقيع اتفاقية الشراكة مع Pakgat بنجاح ✅\n"
+        f"رقم الاتفاقية: {agreement_number}\n"
+        "سيكون التواصل التشغيلي معك عبر رقم الواتساب المسجل لدينا."
+    )
+
+
+def _get_or_create_delivery(
+    db: Session,
+    contract: finance.MerchantContract,
+) -> finance.MerchantContractDelivery:
+    delivery = db.scalar(
+        select(finance.MerchantContractDelivery).where(
+            finance.MerchantContractDelivery.merchant_contract_id == contract.id,
+            finance.MerchantContractDelivery.channel == "whatsapp",
+        )
+    )
+    if delivery is not None:
+        return delivery
+    delivery = finance.MerchantContractDelivery(
+        merchant_contract_id=contract.id,
+        merchant_id=contract.merchant_id,
+        channel="whatsapp",
+        status="pending",
+        attempt_count=0,
+        created_at=core.now_utc(),
+        updated_at=core.now_utc(),
+    )
+    db.add(delivery)
+    db.flush()
+    return delivery
+
+
+def _fail_delivery(
+    db: Session,
+    delivery: finance.MerchantContractDelivery,
+    error: str,
+) -> finance.MerchantContractDelivery:
+    delivery.status = "failed"
+    delivery.last_error = str(error or "delivery_failed")[:500]
+    delivery.updated_at = core.now_utc()
+    db.commit()
+    db.refresh(delivery)
+    return delivery
+
+
+def deliver_signed_contract(
+    db: Session,
+    contract: finance.MerchantContract,
+) -> finance.MerchantContractDelivery:
+    """Notify the merchant and audit signed-PDF delivery without changing contract state."""
+    delivery = _get_or_create_delivery(db, contract)
+    if delivery.status == "sent":
+        return delivery
+
+    delivery.attempt_count = int(delivery.attempt_count or 0) + 1
+    delivery.updated_at = core.now_utc()
+
+    if contract.status != "signed":
+        return _fail_delivery(db, delivery, "contract_not_signed")
+    if not contract.agreement_number:
+        return _fail_delivery(db, delivery, "agreement_number_missing")
+
+    merchant = db.get(finance.Merchant, contract.merchant_id)
+    if merchant is None:
+        return _fail_delivery(db, delivery, "merchant_not_found")
+    phone = core.normalize_saudi_phone(merchant.contact_phone or "")
+    if not phone:
+        return _fail_delivery(db, delivery, "merchant_contact_phone_missing")
+    delivery.destination = phone
+
+    pdf_ok, pdf_content, pdf_error = download_signed_sadq_pdf(contract.sadq_document_id or "")
+    if not pdf_ok or pdf_content is None:
+        return _fail_delivery(db, delivery, pdf_error or "sadq_signed_pdf_download_failed")
+
+    if not delivery.provider_message_id:
+        text_ok, _text_summary = _send_whatsloop_text(
+            phone,
+            _delivery_message(contract.agreement_number),
+        )
+        if not text_ok:
+            return _fail_delivery(db, delivery, "whatsloop_text_failed")
+        # Existing WhatsLoop text helper returns a safe HTTP summary rather than a
+        # provider message id. This sentinel prevents duplicate completion texts.
+        delivery.provider_message_id = "text_sent"
+        delivery.updated_at = core.now_utc()
+        db.flush()
+
+    document_ok, document_result = _send_whatsloop_document(
+        phone,
+        pdf_content,
+        f"{contract.agreement_number}.pdf",
+    )
+    if not document_ok:
+        return _fail_delivery(
+            db,
+            delivery,
+            document_result or "whatsloop_document_delivery_failed",
+        )
+
+    delivery.status = "sent"
+    delivery.last_error = None
+    delivery.sent_at = core.now_utc()
+    delivery.updated_at = delivery.sent_at
+    if document_result:
+        delivery.provider_message_id = str(document_result)[:255]
+    db.commit()
+    db.refresh(delivery)
+    return delivery
+
+
 @core.app.post("/integrations/sadq/webhook")
 async def sadq_webhook(request: Request, db: Session = Depends(core.get_db)):
     """Apply authenticated Sadq terminal-state callbacks idempotently."""
@@ -204,6 +368,14 @@ async def sadq_webhook(request: Request, db: Session = Depends(core.get_db)):
     db.commit()
     db.refresh(contract)
 
+    if callback.status == "signed":
+        try:
+            deliver_signed_contract(db, contract)
+        except Exception:
+            # Sadq completion remains authoritative. Admin retry can safely resume
+            # delivery later even if the provider notification path has an outage.
+            db.rollback()
+
     return {
         "ok": True,
         "status": contract.status,
@@ -214,8 +386,12 @@ async def sadq_webhook(request: Request, db: Session = Depends(core.get_db)):
 __all__ = [
     "SadqCallback",
     "SADQ_WEBHOOK_TOKEN",
+    "SADQ_API_BASE_URL",
+    "SADQ_BEARER_TOKEN",
     "ensure_merchant_contract_schema",
     "normalize_sadq_status",
     "extract_sadq_callback",
+    "download_signed_sadq_pdf",
+    "deliver_signed_contract",
     "sadq_webhook",
 ]
