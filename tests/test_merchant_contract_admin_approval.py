@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from app import application as core
 from app import merchant_contracts as contracts
+from app import merchant_contract_admin_actions as _merchant_contract_admin_actions  # noqa: F401
 from app import merchant_finance as finance
 
 
