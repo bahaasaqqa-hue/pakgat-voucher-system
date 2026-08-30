@@ -8,8 +8,10 @@ settlement, or merchant activation logic.
 from __future__ import annotations
 
 import hmac
+import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -17,8 +19,8 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import Engine, inspect, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import DateTime, Engine, Integer, String, Text, inspect, select, text
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app import application as core
 from app import merchant_finance as finance
@@ -29,6 +31,28 @@ AGREEMENT_NUMBER_INDEX = "uq_merchant_contracts_agreement_number"
 SADQ_WEBHOOK_TOKEN = os.getenv("SADQ_WEBHOOK_TOKEN", "").strip()
 SADQ_API_BASE_URL = os.getenv("SADQ_API_BASE_URL", "https://sandbox-api.sadq-sa.com").rstrip("/")
 SADQ_BEARER_TOKEN = os.getenv("SADQ_BEARER_TOKEN", "").strip()
+PAKGAT_CONTRACT_SIGNER_NAME = "بهاء السقا"
+PAKGAT_CONTRACT_SIGNER_TITLE = "مدير تطوير الأعمال"
+PAKGAT_CONTRACT_SIGNER_PHONE = "0504161514"
+CONTRACT_TEMPLATE_VERSION = "merchant-partnership-v1"
+
+
+class MerchantContractApproval(core.Base):
+    """Immutable first-party approval snapshot for one merchant contract."""
+
+    __tablename__ = "merchant_contract_approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    merchant_contract_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    merchant_id: Mapped[int] = mapped_column(Integer, index=True)
+    agreement_number_snapshot: Mapped[str] = mapped_column(String(40))
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    pakgat_signer_name: Mapped[str] = mapped_column(String(255))
+    pakgat_signer_title: Mapped[str] = mapped_column(String(255))
+    pakgat_signer_phone: Mapped[str] = mapped_column(String(40))
+    merchant_snapshot_json: Mapped[str] = mapped_column(Text)
+    template_version: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
 
 
 @dataclass(frozen=True)
@@ -66,6 +90,69 @@ def ensure_merchant_contract_schema(engine: Engine | None = None) -> None:
         )
 
     finance.MerchantContractDelivery.__table__.create(target, checkfirst=True)
+    MerchantContractApproval.__table__.create(target, checkfirst=True)
+
+
+def _merchant_approval_snapshot(merchant: finance.Merchant) -> str:
+    snapshot = {
+        "merchant_id": merchant.id,
+        "code": merchant.code,
+        "display_name": merchant.display_name,
+        "legal_name": merchant.legal_name,
+        "commercial_registration": merchant.commercial_registration,
+        "tax_number": merchant.tax_number,
+        "contact_phone": merchant.contact_phone,
+        "contact_email": merchant.contact_email,
+        "bank_name": merchant.bank_name,
+        "iban": merchant.iban,
+    }
+    return json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def approve_contract(
+    db: Session,
+    contract: finance.MerchantContract,
+    approved_at: Optional[datetime] = None,
+) -> MerchantContractApproval:
+    """Freeze Pakgat first-party approval without activating the merchant."""
+    existing = db.scalar(
+        select(MerchantContractApproval)
+        .where(MerchantContractApproval.merchant_contract_id == contract.id)
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+    if contract.status != "draft":
+        raise HTTPException(status_code=409, detail="Only draft contracts can be approved")
+
+    merchant = db.get(finance.Merchant, contract.merchant_id)
+    if merchant is None:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+
+    when = approved_at or core.now_utc()
+    if not contract.agreement_number:
+        contract.agreement_number = finance.next_agreement_number(db, when)
+
+    approval = MerchantContractApproval(
+        merchant_contract_id=contract.id,
+        merchant_id=merchant.id,
+        agreement_number_snapshot=contract.agreement_number,
+        approved_at=when,
+        pakgat_signer_name=PAKGAT_CONTRACT_SIGNER_NAME,
+        pakgat_signer_title=PAKGAT_CONTRACT_SIGNER_TITLE,
+        pakgat_signer_phone=PAKGAT_CONTRACT_SIGNER_PHONE,
+        merchant_snapshot_json=_merchant_approval_snapshot(merchant),
+        template_version=CONTRACT_TEMPLATE_VERSION,
+        created_at=when,
+    )
+    contract.status = "approved_internal"
+    contract.updated_at = when
+    db.add(approval)
+    db.add(contract)
+    db.commit()
+    db.refresh(approval)
+    db.refresh(contract)
+    return approval
 
 
 def normalize_sadq_status(value) -> Optional[str]:
@@ -483,11 +570,17 @@ async def sadq_webhook(request: Request, db: Session = Depends(core.get_db)):
 
 
 __all__ = [
+    "MerchantContractApproval",
     "SadqCallback",
     "SADQ_WEBHOOK_TOKEN",
     "SADQ_API_BASE_URL",
     "SADQ_BEARER_TOKEN",
+    "PAKGAT_CONTRACT_SIGNER_NAME",
+    "PAKGAT_CONTRACT_SIGNER_TITLE",
+    "PAKGAT_CONTRACT_SIGNER_PHONE",
+    "CONTRACT_TEMPLATE_VERSION",
     "ensure_merchant_contract_schema",
+    "approve_contract",
     "normalize_sadq_status",
     "extract_sadq_callback",
     "download_signed_sadq_pdf",
