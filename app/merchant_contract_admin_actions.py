@@ -139,13 +139,6 @@ def admin_approve_contract(
     return RedirectResponse(f"/admin/merchants/{merchant_id}", status_code=303)
 
 
-# Keep the existing module reference used by merchant_profile_admin, while the
-# implementation remains isolated from Sadq transport logic.
-contracts.merchant_contract_summary_html = merchant_contract_summary_html
-contracts.admin_create_contract_draft = admin_create_contract_draft
-contracts.admin_approve_contract = admin_approve_contract
-
-
 __all__ = [
     "merchant_contract_summary_html",
     "admin_create_contract_draft",
