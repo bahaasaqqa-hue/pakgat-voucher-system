@@ -1,12 +1,17 @@
+import asyncio
+import json
 import os
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from sqlalchemy import create_engine, inspect, text
+from fastapi import HTTPException
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app import application as core
 from app import merchant_finance as finance
@@ -114,6 +119,113 @@ class MerchantContractStorageTests(unittest.TestCase):
             self.assertIn("merchant_contract_deliveries", tables)
         finally:
             legacy_engine.dispose()
+
+
+class MerchantSadqWebhookTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        core.Voucher.__table__.create(self.engine)
+        core.AuditLog.__table__.create(self.engine)
+        for table in finance.FINANCE_TABLES:
+            table.create(self.engine)
+        self.db = Session(self.engine)
+        self.merchant = finance.Merchant(
+            code="PKG-M-WEBHOOK",
+            display_name="Webhook Merchant",
+            contact_phone="0500000000",
+            status="pending",
+        )
+        self.db.add(self.merchant)
+        self.db.flush()
+        self.contract = finance.MerchantContract(
+            merchant_id=self.merchant.id,
+            agreement_number="PKG-MA-2026-08-0047",
+            status="sent",
+            sadq_document_id="sadq-doc-47",
+            sadq_transaction_id="sadq-request-47",
+        )
+        self.db.add(self.contract)
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+        self.engine.dispose()
+
+    def _request(self, payload, token="webhook-test-token"):
+        body = json.dumps(payload).encode("utf-8")
+        headers = []
+        if token:
+            headers.append((b"authorization", f"Bearer {token}".encode("utf-8")))
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/integrations/sadq/webhook",
+                "headers": headers,
+                "query_string": b"",
+                "scheme": "https",
+                "server": ("example.test", 443),
+                "client": ("127.0.0.1", 12345),
+            },
+            receive,
+        )
+
+    def _completed_payload(self):
+        return {
+            "requestId": self.contract.sadq_transaction_id,
+            "documentId": self.contract.sadq_document_id,
+            "status": 2,
+        }
+
+    def test_invalid_webhook_token_does_not_change_contract(self):
+        with patch.object(contracts, "SADQ_WEBHOOK_TOKEN", "webhook-test-token"):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(contracts.sadq_webhook(self._request(self._completed_payload(), "wrong"), self.db))
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.db.refresh(self.contract)
+        self.assertEqual(self.contract.status, "sent")
+
+    def test_completed_webhook_marks_contract_signed_without_activating_merchant(self):
+        with patch.object(contracts, "SADQ_WEBHOOK_TOKEN", "webhook-test-token"):
+            result = asyncio.run(contracts.sadq_webhook(self._request(self._completed_payload()), self.db))
+        self.assertEqual(result["status"], "signed")
+        self.db.refresh(self.contract)
+        self.db.refresh(self.merchant)
+        self.assertEqual(self.contract.status, "signed")
+        self.assertIsNotNone(self.contract.signed_at)
+        self.assertEqual(self.merchant.status, "pending")
+
+    def test_duplicate_completed_webhook_is_idempotent(self):
+        with patch.object(contracts, "SADQ_WEBHOOK_TOKEN", "webhook-test-token"):
+            asyncio.run(contracts.sadq_webhook(self._request(self._completed_payload()), self.db))
+            asyncio.run(contracts.sadq_webhook(self._request(self._completed_payload()), self.db))
+        note_count = self.db.scalar(
+            select(func.count(finance.MerchantNote.id)).where(
+                finance.MerchantNote.merchant_id == self.merchant.id,
+                finance.MerchantNote.note_type == "contract",
+            )
+        )
+        self.assertEqual(note_count, 1)
+
+    def test_rejected_callback_updates_only_contract_status(self):
+        payload = self._completed_payload()
+        payload["status"] = 4
+        with patch.object(contracts, "SADQ_WEBHOOK_TOKEN", "webhook-test-token"):
+            result = asyncio.run(contracts.sadq_webhook(self._request(payload), self.db))
+        self.db.refresh(self.contract)
+        self.db.refresh(self.merchant)
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(self.contract.status, "rejected")
+        self.assertEqual(self.merchant.status, "pending")
 
 
 if __name__ == "__main__":
