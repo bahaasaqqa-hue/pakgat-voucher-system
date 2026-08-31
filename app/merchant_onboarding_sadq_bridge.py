@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app import application as core
 from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
+from app import merchant_onboarding_sadq_start as sadq_start
 
 
 def _is_signed_transition(contract: finance.MerchantContract, session: Session) -> bool:
@@ -67,6 +68,11 @@ def sync_signed_contract_to_onboarding(session: Session, flush_context, instance
         return
     for contract in candidates:
         _sync_one(session, contract)
+
+
+# The core onboarding module intentionally registered a fail-closed submit route.
+# Replace that single route only after all onboarding primitives are loaded.
+sadq_start.install_submit_route()
 
 
 __all__ = ["sync_signed_contract_to_onboarding"]
