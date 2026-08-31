@@ -39,6 +39,8 @@ sudo -u pakgat git -C "$REPO" show "origin/$BRANCH:tests/test_merchant_onboardin
 "$PY" -m py_compile "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "staged compile failed"
 grep -q 'def _is_sadq_pending' "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "pending guard missing"
 grep -q 'def _sadq_pending_page' "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "pending page missing"
+grep -q 'def resume_sadq_signing' "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "safe resume helper missing"
+grep -q '/merchant/onboarding/sadq/resume' "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "safe resume route missing"
 grep -q 'onboarding._onboarding_page = _sadq_aware_onboarding_page' "$STAGE/app/merchant_onboarding_sadq_start.py" || fail "pending page override missing"
 echo "SADQ_PENDING_UI_STAGED_OK"
 
@@ -123,6 +125,15 @@ from app.application import SessionLocal
 from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
 
+resume_routes = []
+for route in main.app.routes:
+    methods = getattr(route, "methods", set()) or set()
+    if getattr(route, "path", "") == "/merchant/onboarding/sadq/resume" and "POST" in methods:
+        resume_routes.append(route)
+if len(resume_routes) != 1:
+    raise SystemExit(f"expected one Sadq resume POST route, found {len(resume_routes)}")
+print("SADQ_RESUME_ROUTE_INSTALLED=YES")
+
 db = SessionLocal()
 try:
     application = db.scalar(
@@ -140,6 +151,8 @@ try:
     required = (
         "بانتظار إكمال التحقق والتوقيع",
         "تم إنشاء اتفاقية الشراكة وإرسالها للتوثيق",
+        "متابعة التحقق والتوقيع عبر صادق",
+        "action='/merchant/onboarding/sadq/resume'",
         "تحديث حالة الطلب",
     )
     for text in required:
@@ -156,6 +169,7 @@ try:
             raise SystemExit(f"unsafe pending UI control remains: {text}")
     print("CURRENT_APPLICATION_ID=", application.id)
     print("CURRENT_PENDING_UI_LOCKED=YES")
+    print("CURRENT_PENDING_RESUME_BUTTON=YES")
 finally:
     db.close()
 PY
