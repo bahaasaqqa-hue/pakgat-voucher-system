@@ -1,9 +1,11 @@
-"""Start the real Sadq/Nafath signing journey for merchant onboarding.
+"""Start and safely resume the Sadq/Nafath signing journey for merchant onboarding.
 
 This module is loaded after the core onboarding routes. It replaces only the
 POST /merchant/onboarding/submit endpoint so the validated Pakgat agreement is
 rendered, initiated in Sadq, and the merchant is redirected to the Nafath-
-authenticated Sadq invitation. It never activates a merchant.
+authenticated Sadq invitation. It also exposes a resume endpoint that creates a
+fresh invitation for the already-existing Sadq document without creating a new
+envelope or PDF. It never activates a merchant.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ SIGNING_REDIRECT_URL = "https://merchant.pakgat.com/merchant/onboarding"
 SIGNING_WINDOW_DAYS = 7
 
 # Capture the presentation layer that was already installed by
-# merchant_onboarding_ui before this module is loaded.  We add only one
+# merchant_onboarding_ui before this module is loaded. We add only one
 # state-aware override for an already-created Sadq request.
 _presentation_onboarding_page = onboarding._onboarding_page
 
@@ -60,9 +62,9 @@ def _is_sadq_pending(db, merchant: finance.Merchant) -> bool:
 def _sadq_pending_page(db, merchant: finance.Merchant, message: str = "") -> str:
     """Render a locked status page after the signing request already exists.
 
-    The page intentionally contains no profile/document/submit forms.  Once a
-    Sadq request exists, re-submitting onboarding must never try to replace the
-    existing contract or create another signing destination.
+    The page intentionally contains no profile/document/submit forms. Once a
+    Sadq request exists, the only provider action available is resuming signing
+    against that same document id.
     """
     contract = _latest_contract(db, merchant.id)
     agreement_number = str(getattr(contract, "agreement_number", "") or "").strip()
@@ -100,11 +102,16 @@ def _sadq_pending_page(db, merchant: finance.Merchant, message: str = "") -> str
               <strong>الخطوة الحالية</strong>
               <p class='muted' style='margin:7px 0 0'>
                 أكمل التحقق من هوية ممثل المنشأة عبر نفاذ ثم التوقيع الإلكتروني من
-                صفحة التوثيق التي تم فتحها لك. بعد اكتمال التوقيع ينتقل الطلب تلقائيًا
-                إلى مراجعة فريق Pakgat.
+                صفحة التوثيق. إذا أغلقت صفحة صادق أو تعذر تحميلها، استخدم زر المتابعة
+                أدناه لفتح دعوة جديدة على نفس الاتفاقية القائمة دون إنشاء عقد جديد.
               </p>
             </div>
-            <a class='portal-btn' style='width:100%;margin-top:10px'
+            <form method='post' action='/merchant/onboarding/sadq/resume' style='margin:0'>
+              <button class='portal-btn' type='submit' style='width:100%;margin-top:10px'>
+                متابعة التحقق والتوقيع عبر صادق
+              </button>
+            </form>
+            <a class='portal-btn portal-btn-muted' style='width:100%;margin-top:9px'
                href='/merchant/onboarding'>تحديث حالة الطلب</a>
             <a class='portal-btn portal-btn-muted' style='width:100%;margin-top:9px'
                href='/merchant/dashboard'>العودة إلى بوابة الشريك</a>
@@ -145,6 +152,40 @@ def _contract_data(
     )
 
 
+def _send_nafath_invitation(
+    provider,
+    merchant: finance.Merchant,
+    application: onboarding.MerchantOnboardingApplication,
+    document_id: str,
+) -> str:
+    clean_document_id = str(document_id or "").strip()
+    if not clean_document_id:
+        raise ValueError("معرّف مستند صادق غير موجود")
+
+    phone = core.normalize_saudi_phone(merchant.contact_phone or "")
+    if not phone:
+        raise ValueError("رقم جوال ممثل المنشأة غير صالح")
+    representative_name = str(application.representative_name or "").strip()
+    if not representative_name:
+        raise ValueError("اسم ممثل المنشأة غير موجود")
+
+    available_to = (
+        core.now_utc().astimezone(finance.RIYADH_TZ) + timedelta(days=SIGNING_WINDOW_DAYS)
+    ).date().isoformat()
+    invitation = provider.send_nafath_invitation(
+        clean_document_id,
+        destination_name=representative_name,
+        destination_email=str(merchant.contact_email or "").strip(),
+        destination_phone=f"+{phone}",
+        redirect_url=SIGNING_REDIRECT_URL,
+        available_to=available_to,
+    )
+    invitation_url = str(invitation.invitation_url or "").strip()
+    if not invitation_url.startswith("https://"):
+        raise ValueError("لم تُرجع صادق رابط توقيع صالح")
+    return invitation_url
+
+
 def start_sadq_signing(
     db,
     merchant: finance.Merchant,
@@ -179,27 +220,12 @@ def start_sadq_signing(
         db.commit()
         db.refresh(contract)
 
-    phone = core.normalize_saudi_phone(merchant.contact_phone or "")
-    if not phone:
-        raise ValueError("رقم جوال ممثل المنشأة غير صالح")
-    representative_name = str(application.representative_name or "").strip()
-    if not representative_name:
-        raise ValueError("اسم ممثل المنشأة غير موجود")
-
-    available_to = (
-        core.now_utc().astimezone(finance.RIYADH_TZ) + timedelta(days=SIGNING_WINDOW_DAYS)
-    ).date().isoformat()
-    invitation = provider.send_nafath_invitation(
-        str(contract.sadq_document_id),
-        destination_name=representative_name,
-        destination_email=str(merchant.contact_email or "").strip(),
-        destination_phone=f"+{phone}",
-        redirect_url=SIGNING_REDIRECT_URL,
-        available_to=available_to,
+    invitation_url = _send_nafath_invitation(
+        provider,
+        merchant,
+        application,
+        str(contract.sadq_document_id or ""),
     )
-    invitation_url = str(invitation.invitation_url or "").strip()
-    if not invitation_url.startswith("https://"):
-        raise ValueError("لم تُرجع صادق رابط توقيع صالح")
 
     now = core.now_utc()
     contract.status = "sadq_pending"
@@ -214,6 +240,30 @@ def start_sadq_signing(
     db.refresh(contract)
     db.refresh(application)
     return invitation_url
+
+
+def resume_sadq_signing(
+    db,
+    merchant: finance.Merchant,
+    *,
+    client=None,
+) -> str:
+    """Create a fresh invitation for the existing Sadq document only.
+
+    This function never renders a PDF and never initiates a Sadq envelope.
+    """
+    application = _existing_application(db, merchant.id)
+    contract = _latest_contract(db, merchant.id)
+    if application is None or contract is None:
+        raise ValueError("لا يوجد طلب توثيق قائم")
+    if application.status != "sadq_pending" or contract.status != "sadq_pending":
+        raise ValueError("طلب التوثيق ليس بانتظار التوقيع")
+    document_id = str(contract.sadq_document_id or "").strip()
+    if not document_id:
+        raise ValueError("معرّف مستند صادق غير موجود")
+
+    provider = client or sadq_client.get_default_client()
+    return _send_nafath_invitation(provider, merchant, application, document_id)
 
 
 async def merchant_onboarding_submit_to_sadq(
@@ -259,18 +309,49 @@ async def merchant_onboarding_submit_to_sadq(
     return RedirectResponse(signing_url, status_code=303)
 
 
+async def merchant_onboarding_resume_sadq(
+    request: Request,
+    db=Depends(core.get_db),
+):
+    """Resume the existing Sadq document by issuing only a fresh invitation."""
+    merchant = portal._merchant_from_request(request, db)
+    if merchant is None:
+        return RedirectResponse("/merchant/register", status_code=303)
+    try:
+        signing_url = resume_sadq_signing(db, merchant)
+    except (ValueError, sadq_client.SadqError):
+        return HTMLResponse(
+            onboarding._onboarding_page(
+                db,
+                merchant,
+                "تعذر فتح صفحة التحقق والتوقيع عبر صادق الآن. حاول مرة أخرى بعد قليل.",
+            ),
+            status_code=502,
+        )
+    return RedirectResponse(signing_url, status_code=303)
+
+
 def install_submit_route() -> None:
-    """Replace only the legacy fail-closed onboarding submit route."""
+    """Replace legacy submit and install the safe existing-document resume route."""
     routes = core.app.router.routes
     removed = 0
+    resume_removed = 0
     for route in list(routes):
         methods = getattr(route, "methods", set()) or set()
-        if getattr(route, "path", "") == "/merchant/onboarding/submit" and "POST" in methods:
+        path = getattr(route, "path", "")
+        if path == "/merchant/onboarding/submit" and "POST" in methods:
             routes.remove(route)
             removed += 1
+        elif path == "/merchant/onboarding/sadq/resume" and "POST" in methods:
+            routes.remove(route)
+            resume_removed += 1
     if removed != 1:
         raise RuntimeError(
             f"Expected exactly one merchant onboarding submit route, found {removed}"
+        )
+    if resume_removed > 1:
+        raise RuntimeError(
+            f"Expected at most one Sadq resume route, found {resume_removed}"
         )
     core.app.add_api_route(
         "/merchant/onboarding/submit",
@@ -279,12 +360,20 @@ def install_submit_route() -> None:
         response_class=HTMLResponse,
         name="merchant_onboarding_submit",
     )
+    core.app.add_api_route(
+        "/merchant/onboarding/sadq/resume",
+        merchant_onboarding_resume_sadq,
+        methods=["POST"],
+        response_class=HTMLResponse,
+        name="merchant_onboarding_sadq_resume",
+    )
 
 
-# Expose the helper through the existing onboarding module for tests/callers and
+# Expose helpers through the existing onboarding module for tests/callers and
 # make the existing GET /merchant/onboarding route state-aware without replacing
 # that route itself.
 onboarding.start_sadq_signing = start_sadq_signing
+onboarding.resume_sadq_signing = resume_sadq_signing
 onboarding._onboarding_page = _sadq_aware_onboarding_page
 
 
@@ -292,6 +381,8 @@ __all__ = [
     "SIGNING_REDIRECT_URL",
     "SIGNING_WINDOW_DAYS",
     "start_sadq_signing",
+    "resume_sadq_signing",
     "merchant_onboarding_submit_to_sadq",
+    "merchant_onboarding_resume_sadq",
     "install_submit_route",
 ]
