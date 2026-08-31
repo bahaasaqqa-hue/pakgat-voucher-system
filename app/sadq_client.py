@@ -1,7 +1,7 @@
 """Authenticated Sadq API client for Pakgat merchant onboarding.
 
-This module owns dynamic Integration-token retrieval and webhook registration.
-It does not create envelopes or Nafath invitations; those are separate stages.
+This module owns dynamic Integration-token retrieval, webhook registration,
+PDF envelope initiation, and Nafath-authenticated signing invitations.
 Secrets are read from environment variables and are never logged.
 """
 
@@ -32,6 +32,18 @@ class HttpResponse:
     body: bytes
 
 
+@dataclass(frozen=True)
+class SadqEnvelope:
+    document_id: str
+    envelope_id: str
+
+
+@dataclass(frozen=True)
+class SadqInvitation:
+    invitation_url: str
+    raw_data: object | None = None
+
+
 Transport = Callable[
     [str, str, dict[str, str] | None, bytes | None, int], HttpResponse
 ]
@@ -52,6 +64,47 @@ def _https_url(value: str, label: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise SadqError(f"Invalid Sadq configuration URL: {label}")
     return urlunsplit(("https", parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _public_https_url(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    return raw
+
+
+def _find_invitation_url(value: object) -> str:
+    preferred = {
+        "invitationlink",
+        "invitationurl",
+        "signingurl",
+        "signurl",
+        "url",
+        "returnurl",
+    }
+    if isinstance(value, str):
+        return _public_https_url(value)
+    if isinstance(value, dict):
+        for key, candidate in value.items():
+            if str(key).replace("_", "").lower() in preferred:
+                found = _public_https_url(candidate)
+                if found:
+                    return found
+        for candidate in value.values():
+            found = _find_invitation_url(candidate)
+            if found:
+                return found
+    if isinstance(value, list):
+        for candidate in value:
+            found = _find_invitation_url(candidate)
+            if found:
+                return found
+    return ""
 
 
 @dataclass(frozen=True)
@@ -285,6 +338,82 @@ class SadqClient:
         if not isinstance(data, dict):
             raise SadqError("Sadq webhook creation returned an unexpected data shape")
         return data
+
+    def initiate_base64_pdf(self, pdf_content: bytes, filename: str) -> SadqEnvelope:
+        content = bytes(pdf_content or b"")
+        clean_filename = str(filename or "").strip()
+        if not content.startswith(b"%PDF"):
+            raise SadqError("Sadq envelope requires a valid PDF document")
+        if not clean_filename or not clean_filename.lower().endswith(".pdf"):
+            raise SadqError("Sadq envelope requires a PDF filename")
+
+        response = self._authorized_json(
+            "POST",
+            "/api/v1/envelopes/initiate-base64",
+            payload={
+                "File": {
+                    "FileName": clean_filename,
+                    "File": base64.b64encode(content).decode("ascii"),
+                    "hideEnvelopData": False,
+                }
+            },
+        )
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise SadqError("Sadq envelope initiation returned an unexpected data shape")
+        document_id = str(data.get("documentId") or "").strip()
+        envelope_id = str(data.get("envelopeId") or "").strip()
+        if not document_id or not envelope_id:
+            raise SadqError("Sadq envelope initiation returned incomplete identifiers")
+        return SadqEnvelope(document_id=document_id, envelope_id=envelope_id)
+
+    def send_nafath_invitation(
+        self,
+        document_id: str,
+        *,
+        destination_name: str,
+        destination_email: str,
+        destination_phone: str,
+        redirect_url: str,
+        available_to: str,
+    ) -> SadqInvitation:
+        clean_document_id = _required(document_id, "document_id")
+        clean_name = _required(destination_name, "destination_name")
+        clean_phone = _required(destination_phone, "destination_phone")
+        clean_email = str(destination_email or "").strip()
+        clean_redirect = _https_url(redirect_url, "redirect_url")
+        clean_available_to = _required(available_to, "available_to")
+
+        response = self._authorized_json(
+            "POST",
+            "/api/v2/invitations/send",
+            payload={
+                "documentId": clean_document_id,
+                "destinations": [
+                    {
+                        "destinationName": clean_name,
+                        "destinationEmail": clean_email,
+                        "destinationPhoneNumber": clean_phone,
+                        "signeOrder": 0,
+                        "ConsentOnly": True,
+                        "signatories": [],
+                        "availableTo": clean_available_to,
+                        "authenticationType": 7,
+                        "invitationLanguage": 1,
+                        "redirectUrl": clean_redirect,
+                    }
+                ],
+                "invitationMessage": (
+                    "يرجى إكمال التحقق من الهوية والتوقيع على اتفاقية الشراكة مع Pakgat."
+                ),
+                "invitationSubject": "اتفاقية شراكة Pakgat",
+            },
+        )
+        data = response.get("data")
+        invitation_url = _find_invitation_url(data)
+        if not invitation_url:
+            invitation_url = _find_invitation_url(response)
+        return SadqInvitation(invitation_url=invitation_url, raw_data=data)
 
 
 _default_client: SadqClient | None = None
