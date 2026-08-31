@@ -19,7 +19,7 @@ PAKGAT_LOGO_URL = (
 )
 MASCOT_IMAGE_URL = (
     "https://cdn.files.salla.network/other/650097422/"
-    "c939a862-0e1d-461b-ae95-7cad2dc9202a-original.webp"
+    "4c3a03f5-13ce-4309-ac36-a0b4fb850631-original.webp"
 )
 NAFATH_IMAGE_URL = (
     "https://cdn.files.salla.network/other/650097422/"
@@ -27,7 +27,7 @@ NAFATH_IMAGE_URL = (
 )
 
 _ASSET_CSS = f"""
-/* Official Pakgat / mascot / Nafath assets */
+/* Official Pakgat / transparent mascot / Nafath assets */
 .brand img[src='{PAKGAT_LOGO_URL}']{{
   width:132px!important;
   max-width:34vw;
@@ -36,9 +36,8 @@ _ASSET_CSS = f"""
   display:block;
 }}
 
-/* Blend the Salla-hosted mascot into the light hero background.
-   The source image has a white canvas, so multiply makes white pixels inherit
-   the page background while preserving the character colors. */
+/* The mascot source already has its background removed. Keep the container and
+   image transparent; no blend mode is needed. */
 .mascot{{
   background:transparent!important;
   border:0!important;
@@ -46,12 +45,14 @@ _ASSET_CSS = f"""
   overflow:visible!important;
 }}
 .mascot img[src='{MASCOT_IMAGE_URL}']{{
+  display:block;
   background:transparent!important;
-  mix-blend-mode:multiply;
   border:0!important;
   border-radius:0!important;
   box-shadow:none!important;
   object-fit:contain;
+  max-width:100%;
+  height:auto;
   filter:drop-shadow(0 14px 24px rgba(15,37,84,.10));
 }}
 
@@ -106,15 +107,12 @@ def apply_official_brand_assets(html: str) -> str:
             "</div>"
         )
 
-        # Prefer replacing the existing small Nafath badge in the lower trust card.
         pattern = re.compile(
             r"<(?P<tag>[a-zA-Z0-9]+)(?P<attrs>[^>]*\bclass=['\"][^'\"]*\bnafath\b[^'\"]*['\"][^>]*)>.*?</(?P=tag)>",
             re.DOTALL,
         )
         rendered, count = pattern.subn(nafath_block, rendered, count=1)
 
-        # Fallback for future copy/layout changes: place the image immediately
-        # below the existing identity-trust heading.
         if count == 0:
             heading = "<h3>هوية موثوقة</h3>"
             if heading in rendered:
