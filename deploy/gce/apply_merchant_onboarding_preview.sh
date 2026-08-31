@@ -3,7 +3,7 @@ set -u
 
 REPO=/opt/pakgat-voucher-system
 SERVICE=pakgat-voucher
-TARGET=fc44fbab04cc7762cbfab98455544f4916c97653
+TARGET=f5c47ba1320c87e4297e4152b6ee82f7437d2529
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/tmp/pakgat-merchant-onboarding-preview-$STAMP"
 
@@ -26,6 +26,7 @@ FILES=(
   app/merchant_contracts.py
   app/merchant_onboarding.py
   app/merchant_onboarding_ui.py
+  app/merchant_onboarding_brand_assets.py
   main.py
 )
 
@@ -62,7 +63,7 @@ sudo -u pakgat git -C "$REPO" cat-file -e "$TARGET^{commit}" || {
   fail "target commit is unavailable"
 }
 
-for f in app/merchant_contract_admin_actions.py app/merchant_contracts.py app/merchant_onboarding.py app/merchant_onboarding_ui.py; do
+for f in app/merchant_contract_admin_actions.py app/merchant_contracts.py app/merchant_onboarding.py app/merchant_onboarding_ui.py app/merchant_onboarding_brand_assets.py; do
   mkdir -p "$REPO/$(dirname "$f")"
   sudo -u pakgat git -C "$REPO" show "$TARGET:$f" > "$REPO/$f" || {
     rollback
@@ -98,6 +99,13 @@ if "merchant_onboarding_ui as _merchant_onboarding_ui" not in text:
         raise SystemExit("merchant onboarding anchor not found in main.py")
     text = text.replace(ui_anchor, ui_insert, 1)
 
+brand_anchor = "from app import merchant_onboarding_ui as _merchant_onboarding_ui  # noqa: F401 - friendly partner registration presentation\n"
+brand_insert = brand_anchor + "from app import merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets  # noqa: F401 - official Pakgat logo and Nafath image\n"
+if "merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets" not in text:
+    if brand_anchor not in text:
+        raise SystemExit("merchant onboarding UI anchor not found in main.py")
+    text = text.replace(brand_anchor, brand_insert, 1)
+
 # Preview release intentionally does NOT register the global Sadq bridge.
 text = text.replace("from app import merchant_onboarding_sadq_bridge as _merchant_onboarding_sadq_bridge  # noqa: F401 - signed Sadq contracts become pending Pakgat review\n", "")
 
@@ -112,6 +120,7 @@ chown pakgat:pakgat \
   "$REPO/app/merchant_contracts.py" \
   "$REPO/app/merchant_onboarding.py" \
   "$REPO/app/merchant_onboarding_ui.py" \
+  "$REPO/app/merchant_onboarding_brand_assets.py" \
   "$REPO/main.py" || {
   rollback
   fail "chown failed"
@@ -127,7 +136,8 @@ sudo -u pakgat "$REPO/.venv/bin/python" -m compileall -q \
   "$REPO/app/merchant_contract_admin_actions.py" \
   "$REPO/app/merchant_contracts.py" \
   "$REPO/app/merchant_onboarding.py" \
-  "$REPO/app/merchant_onboarding_ui.py" || {
+  "$REPO/app/merchant_onboarding_ui.py" \
+  "$REPO/app/merchant_onboarding_brand_assets.py" || {
   rollback
   fail "compile failed"
 }
@@ -141,7 +151,10 @@ READY=0
 for _ in {1..20}; do
   if systemctl is-active --quiet "$SERVICE"; then
     PAGE="$(curl -fsS http://127.0.0.1:8000/merchant/register 2>/dev/null || true)"
-    if grep -q 'عقد الشراكة مع بكجات' <<<"$PAGE" && grep -q 'التحقق عبر نفاذ' <<<"$PAGE"; then
+    if grep -q 'عقد الشراكة مع بكجات' <<<"$PAGE" \
+      && grep -q 'التحقق عبر نفاذ' <<<"$PAGE" \
+      && grep -q 'd2d7a36c-08de-4b6b-a8be-80490dbc0fc8-original.webp' <<<"$PAGE" \
+      && grep -q '34e46b26-5825-429a-8567-c29175cbeb44-original.webp' <<<"$PAGE"; then
       READY=1
       break
     fi
@@ -161,7 +174,7 @@ curl -fsS http://127.0.0.1:8000/merchant 2>/dev/null | grep -q 'Pakgat' || {
   fail "existing merchant portal health check failed"
 }
 
-echo "MERCHANT_ONBOARDING_UI_DEPLOY_OK"
+echo "MERCHANT_ONBOARDING_BRAND_DEPLOY_OK"
 echo "BACKUP=$BACKUP"
 echo "LOCAL_REGISTER=http://127.0.0.1:8000/merchant/register"
 echo "PUBLIC_REGISTER=https://merchant.pakgat.com/merchant/register"
