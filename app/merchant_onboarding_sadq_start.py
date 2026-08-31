@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
 
 from app import application as core
 from app import merchant_contract_pdf
@@ -23,6 +24,101 @@ from app import sadq_client
 
 SIGNING_REDIRECT_URL = "https://merchant.pakgat.com/merchant/onboarding"
 SIGNING_WINDOW_DAYS = 7
+
+# Capture the presentation layer that was already installed by
+# merchant_onboarding_ui before this module is loaded.  We add only one
+# state-aware override for an already-created Sadq request.
+_presentation_onboarding_page = onboarding._onboarding_page
+
+
+def _existing_application(db, merchant_id: int):
+    return db.scalar(
+        select(onboarding.MerchantOnboardingApplication)
+        .where(onboarding.MerchantOnboardingApplication.merchant_id == merchant_id)
+        .limit(1)
+    )
+
+
+def _latest_contract(db, merchant_id: int):
+    return db.scalar(
+        select(finance.MerchantContract)
+        .where(finance.MerchantContract.merchant_id == merchant_id)
+        .order_by(finance.MerchantContract.created_at.desc())
+        .limit(1)
+    )
+
+
+def _is_sadq_pending(db, merchant: finance.Merchant) -> bool:
+    application = _existing_application(db, merchant.id)
+    contract = _latest_contract(db, merchant.id)
+    return bool(
+        (application is not None and application.status == "sadq_pending")
+        or (contract is not None and contract.status == "sadq_pending")
+    )
+
+
+def _sadq_pending_page(db, merchant: finance.Merchant, message: str = "") -> str:
+    """Render a locked status page after the signing request already exists.
+
+    The page intentionally contains no profile/document/submit forms.  Once a
+    Sadq request exists, re-submitting onboarding must never try to replace the
+    existing contract or create another signing destination.
+    """
+    contract = _latest_contract(db, merchant.id)
+    agreement_number = str(getattr(contract, "agreement_number", "") or "").strip()
+    agreement_row = (
+        "<div style='margin:16px 0;padding:13px 15px;border:1px solid #dce8f5;"
+        "border-radius:12px;background:#f8fbff'>"
+        "<span class='muted'>رقم الاتفاقية</span><br>"
+        f"<strong dir='ltr'>{core.esc(agreement_number)}</strong></div>"
+        if agreement_number
+        else ""
+    )
+    notice = (
+        "<div style='margin:14px 0;padding:12px 14px;border-radius:12px;"
+        "background:#fff8e8;border:1px solid #f0d79c;color:#6d5317'>"
+        f"{core.esc(message)}</div>"
+        if message
+        else ""
+    )
+    return portal._portal_shell(
+        "متابعة التوثيق",
+        f"""
+        <main class='portal-wrap' style='padding:38px 0 58px'>
+          <section class='portal-card' style='max-width:720px;margin:auto;padding:28px'>
+            <div style='margin-bottom:15px'>
+              <span class='pill'>بانتظار إكمال التحقق والتوقيع</span>
+            </div>
+            <h1 style='margin:0 0 10px'>تم إنشاء اتفاقية الشراكة وإرسالها للتوثيق</h1>
+            <p class='muted' style='font-size:15px;line-height:1.9'>
+              طلبك محفوظ والعقد قائم بالفعل. لا تحتاج إلى إعادة إدخال البيانات أو رفع
+              المستندات أو إرسال الطلب مرة أخرى.
+            </p>
+            {agreement_row}
+            {notice}
+            <div style='margin:18px 0;padding:16px;border-radius:14px;background:#eef7ff;"
+                 "border:1px solid #d5e9fb'>
+              <strong>الخطوة الحالية</strong>
+              <p class='muted' style='margin:7px 0 0'>
+                أكمل التحقق من هوية ممثل المنشأة عبر نفاذ ثم التوقيع الإلكتروني من
+                صفحة التوثيق التي تم فتحها لك. بعد اكتمال التوقيع ينتقل الطلب تلقائيًا
+                إلى مراجعة فريق Pakgat.
+              </p>
+            </div>
+            <a class='portal-btn' style='width:100%;margin-top:10px'
+               href='/merchant/onboarding'>تحديث حالة الطلب</a>
+            <a class='portal-btn portal-btn-muted' style='width:100%;margin-top:9px'
+               href='/merchant/dashboard'>العودة إلى بوابة الشريك</a>
+          </section>
+        </main>
+        """,
+    )
+
+
+def _sadq_aware_onboarding_page(db, merchant: finance.Merchant, message: str = "") -> str:
+    if _is_sadq_pending(db, merchant):
+        return _sadq_pending_page(db, merchant, message)
+    return _presentation_onboarding_page(db, merchant, message)
 
 
 def _contract_data(
@@ -130,6 +226,12 @@ async def merchant_onboarding_submit_to_sadq(
     if merchant is None:
         return RedirectResponse("/merchant/register", status_code=303)
 
+    # A signing request already exists. Never call submit_onboarding() again,
+    # because that path is intentionally allowed to create/prepare a contract
+    # only before the first Sadq submission.
+    if _is_sadq_pending(db, merchant):
+        return HTMLResponse(onboarding._onboarding_page(db, merchant), status_code=200)
+
     form = await request.form()
     accepted = onboarding._form_value(form, "declaration") == "1"
     try:
@@ -151,7 +253,7 @@ async def merchant_onboarding_submit_to_sadq(
             onboarding._onboarding_page(
                 db,
                 merchant,
-                "تعذر بدء التحقق والتوقيع عبر صادق الآن. حاول مرة أخرى بعد قليل.",
+                "تعذر بدء التحقق والتوقيع الآن. حاول مرة أخرى بعد قليل.",
             ),
             status_code=502,
         )
@@ -180,8 +282,11 @@ def install_submit_route() -> None:
     )
 
 
-# Expose the helper through the existing onboarding module for tests and callers.
+# Expose the helper through the existing onboarding module for tests/callers and
+# make the existing GET /merchant/onboarding route state-aware without replacing
+# that route itself.
 onboarding.start_sadq_signing = start_sadq_signing
+onboarding._onboarding_page = _sadq_aware_onboarding_page
 
 
 __all__ = [
