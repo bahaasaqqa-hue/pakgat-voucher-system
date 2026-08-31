@@ -14,6 +14,11 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
+PAKGAT_SIGNER_NAME = "بهاء السقا"
+PAKGAT_SIGNER_TITLE = "مدير تطوير الأعمال"
+PAKGAT_SIGNER_PHONE = "0504161514"
+
+
 class ContractRenderError(RuntimeError):
     """Safe contract-generation error."""
 
@@ -97,6 +102,12 @@ def _replace_row_value(xml: str, label: str, value: str) -> str:
     return result
 
 
+def _replace_required_placeholder(xml: str, placeholder: str, value: str) -> str:
+    if placeholder not in xml:
+        raise ContractRenderError(f"Merchant contract template placeholder is missing: {placeholder}")
+    return xml.replace(placeholder, _xml_escape(value))
+
+
 def build_contract_docx(data: ContractData) -> bytes:
     source = io.BytesIO(_template_bytes())
     output = io.BytesIO()
@@ -136,6 +147,21 @@ def build_contract_docx(data: ContractData) -> bytes:
                 )
                 for label, value in fields:
                     xml = _replace_row_value(xml, label, value)
+
+                signature_fields = (
+                    ("{{PAKGAT_SIGNER_NAME}}", PAKGAT_SIGNER_NAME),
+                    ("{{PAKGAT_SIGNER_TITLE}}", PAKGAT_SIGNER_TITLE),
+                    ("{{PAKGAT_SIGNER_PHONE}}", PAKGAT_SIGNER_PHONE),
+                    ("{{MERCHANT_REP_NAME}}", data.representative_name),
+                    ("{{MERCHANT_REP_TITLE}}", data.representative_title),
+                    ("{{MERCHANT_PHONE}}", data.contact_phone),
+                    ("{{AGREEMENT_DATE}}", data.agreement_date),
+                )
+                for placeholder, value in signature_fields:
+                    xml = _replace_required_placeholder(xml, placeholder, value)
+
+                if "{{" in xml or "}}" in xml:
+                    raise ContractRenderError("Merchant contract contains unresolved placeholders")
                 payload = xml.encode("utf-8")
             rendered.writestr(info, payload)
     result = output.getvalue()
@@ -199,6 +225,9 @@ def render_contract_pdf(data: ContractData, *, converter=_libreoffice_converter)
 
 
 __all__ = [
+    "PAKGAT_SIGNER_NAME",
+    "PAKGAT_SIGNER_TITLE",
+    "PAKGAT_SIGNER_PHONE",
     "ContractData",
     "ContractRenderError",
     "build_contract_docx",
