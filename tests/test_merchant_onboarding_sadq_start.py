@@ -135,6 +135,24 @@ class MerchantOnboardingSadqStartTests(unittest.TestCase):
         self.assertEqual(client.envelopes, [])
         self.assertEqual(client.invitations[0][0], "doc-existing")
 
+    def test_sadq_pending_page_is_locked_and_contains_no_resubmit_controls(self):
+        self.application.status = "sadq_pending"
+        self.contract.status = "sadq_pending"
+        self.contract.sadq_document_id = "doc-existing"
+        self.contract.sadq_transaction_id = "env-existing"
+        self.db.commit()
+
+        html = _sadq_start._sadq_aware_onboarding_page(self.db, self.merchant)
+
+        self.assertTrue(_sadq_start._is_sadq_pending(self.db, self.merchant))
+        self.assertIn("بانتظار إكمال التحقق والتوقيع", html)
+        self.assertIn("PKG-MA-2026-08-0042", html)
+        self.assertIn("تحديث حالة الطلب", html)
+        self.assertNotIn("action='/merchant/onboarding/submit'", html)
+        self.assertNotIn("action='/merchant/onboarding/profile'", html)
+        self.assertNotIn("action='/merchant/onboarding/documents'", html)
+        self.assertNotIn("يوجد عقد قائم لا يمكن استبداله من التسجيل", html)
+
 
 if __name__ == "__main__":
     unittest.main()
