@@ -133,6 +133,7 @@ for path in "${FILES[@]}"; do
 done
 
 # Targeted regression with test-only environment; no provider calls are made.
+# Run the exact staged test files so deployment validation cannot silently use stale production tests.
 (
   cd "$REPO" || exit 1
   export DATABASE_URL="sqlite:///:memory:"
@@ -142,9 +143,10 @@ done
   export PUBLIC_BASE_URL="https://example.test"
   export WHATSLOOP_API_BASE_URL="https://example.test/api/v1"
   export WHATSLOOP_API_TOKEN="test-only-whatsloop-token"
-  "$PY" -m unittest discover -s tests -p 'test_merchant_contract_pdf.py' -v &&
-  "$PY" -m unittest discover -s tests -p 'test_sadq_signing_client.py' -v &&
-  "$PY" -m unittest discover -s tests -p 'test_merchant_onboarding_sadq_start.py' -v
+  export PYTHONPATH="$REPO"
+  "$PY" "$STAGE/tests/test_merchant_contract_pdf.py" -v &&
+  "$PY" "$STAGE/tests/test_sadq_signing_client.py" -v &&
+  "$PY" "$STAGE/tests/test_merchant_onboarding_sadq_start.py" -v
 )
 TEST_RC=$?
 if [ "$TEST_RC" -ne 0 ]; then
