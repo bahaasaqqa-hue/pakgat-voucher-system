@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import merchant_contracts as contracts
 from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
+from app import merchant_onboarding_sadq_start as _sadq_start  # installs helper on onboarding
 from app import sadq_client
 
 
