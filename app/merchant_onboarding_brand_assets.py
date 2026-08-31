@@ -1,8 +1,8 @@
 """Official merchant-facing brand assets for the Pakgat onboarding page.
 
 Presentation only: keep the onboarding flow unchanged while replacing the
-embedded Pakgat logo with the official Salla-hosted asset and showing the
-official Nafath image in the trust section.
+embedded Pakgat logo and mascot with official Salla-hosted assets and showing
+the official Nafath image in the trust section.
 """
 
 from __future__ import annotations
@@ -17,13 +17,17 @@ PAKGAT_LOGO_URL = (
     "https://cdn.files.salla.network/theme/650097422/"
     "d2d7a36c-08de-4b6b-a8be-80490dbc0fc8-original.webp"
 )
+MASCOT_IMAGE_URL = (
+    "https://cdn.files.salla.network/other/650097422/"
+    "c939a862-0e1d-461b-ae95-7cad2dc9202a-original.webp"
+)
 NAFATH_IMAGE_URL = (
     "https://cdn.files.salla.network/other/650097422/"
     "34e46b26-5825-429a-8567-c29175cbeb44-original.webp"
 )
 
 _ASSET_CSS = f"""
-/* Official Pakgat / Nafath assets */
+/* Official Pakgat / mascot / Nafath assets */
 .brand img[src='{PAKGAT_LOGO_URL}']{{
   width:132px!important;
   max-width:34vw;
@@ -63,6 +67,10 @@ def apply_official_brand_assets(html: str) -> str:
     embedded_logo = getattr(ui, "LOGO", "")
     if embedded_logo:
         rendered = rendered.replace(embedded_logo, PAKGAT_LOGO_URL)
+
+    embedded_mascot = getattr(ui, "MASCOT", "")
+    if embedded_mascot:
+        rendered = rendered.replace(embedded_mascot, MASCOT_IMAGE_URL)
 
     if _ASSET_CSS not in rendered:
         if "</style>" in rendered:
@@ -116,6 +124,7 @@ onboarding._register_page = register_page_with_official_assets
 
 __all__ = [
     "PAKGAT_LOGO_URL",
+    "MASCOT_IMAGE_URL",
     "NAFATH_IMAGE_URL",
     "apply_official_brand_assets",
     "register_page_with_official_assets",
