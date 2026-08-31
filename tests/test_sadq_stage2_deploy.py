@@ -37,6 +37,12 @@ class SadqStage2DeployTests(unittest.TestCase):
         restart = self.text.index("systemctl restart pakgat-voucher", tests_ok)
         self.assertLess(tests_ok, restart)
 
+    def test_rollout_executes_the_staged_tests_not_the_production_test_directory(self):
+        self.assertIn('"$PY" "$STAGE/tests/test_merchant_contract_pdf.py" -v', self.text)
+        self.assertIn('"$PY" "$STAGE/tests/test_sadq_signing_client.py" -v', self.text)
+        self.assertIn('"$PY" "$STAGE/tests/test_merchant_onboarding_sadq_start.py" -v', self.text)
+        self.assertNotIn("-m unittest discover -s tests", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
