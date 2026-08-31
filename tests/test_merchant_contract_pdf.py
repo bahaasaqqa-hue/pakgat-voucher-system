@@ -1,7 +1,11 @@
 import io
 import os
+import tempfile
 import unittest
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -76,6 +80,25 @@ class MerchantContractPDFTests(unittest.TestCase):
 
         self.assertEqual(result, b"%PDF-1.7\ncontract\n")
         self.assertEqual(len(calls), 1)
+
+    def test_libreoffice_uses_isolated_profile_and_finishes_before_nginx_timeout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            docx_path = root / "merchant-agreement.docx"
+            docx_path.write_bytes(b"PK-test")
+
+            with mock.patch.object(merchant_contract_pdf.shutil, "which", return_value="/usr/bin/libreoffice"), mock.patch.object(
+                merchant_contract_pdf.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0, stdout=b"", stderr=b""),
+            ) as run:
+                merchant_contract_pdf._libreoffice_converter(docx_path, root)
+
+        args, kwargs = run.call_args
+        command = args[0]
+        self.assertTrue(any(part.startswith("-env:UserInstallation=file://") for part in command))
+        self.assertIn("--headless", command)
+        self.assertLessEqual(kwargs["timeout"], 45)
 
 
 if __name__ == "__main__":
