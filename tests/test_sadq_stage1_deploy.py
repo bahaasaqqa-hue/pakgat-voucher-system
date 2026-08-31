@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,9 @@ class SadqStage1DeployContractTests(unittest.TestCase):
         cls.root = Path(__file__).resolve().parents[1]
         cls.path = cls.root / "deploy" / "gce" / "configure_sadq_sandbox_stage1.sh"
         cls.source = cls.path.read_text(encoding="utf-8")
+
+    def test_stage1_shell_syntax_is_valid(self):
+        subprocess.run(["bash", "-n", str(self.path)], check=True)
 
     def test_stage1_deploy_is_bounded_and_does_not_use_set_e(self):
         self.assertNotIn("set -e", self.source)
@@ -21,6 +25,11 @@ class SadqStage1DeployContractTests(unittest.TestCase):
             "app/whatsloop_inbound.py",
         ):
             self.assertIn(protected, self.source)
+
+    def test_stage1_uses_known_merchant_route_for_service_readiness(self):
+        self.assertNotIn("127.0.0.1:8000/health", self.source)
+        self.assertIn("127.0.0.1:8000/merchant", self.source)
+        self.assertIn('"200" || "$HTTP" == "303" || "$HTTP" == "307"', self.source)
 
     def test_stage1_configures_dynamic_credentials_without_static_bearer(self):
         for name in (
