@@ -148,11 +148,23 @@ def _libreoffice_converter(docx_path: Path, output_dir: Path) -> None:
     executable = shutil.which("libreoffice") or shutil.which("soffice")
     if not executable:
         raise ContractRenderError("LibreOffice is not installed on the server")
+
+    # LibreOffice serializes work through its user profile. A shared/default
+    # profile can deadlock concurrent web requests. Give every conversion a
+    # private profile inside the request temp directory so attempts are isolated.
+    profile_dir = output_dir / "libreoffice-profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_uri = profile_dir.resolve().as_uri()
+
     try:
         process = subprocess.run(
             [
                 executable,
+                f"-env:UserInstallation={profile_uri}",
                 "--headless",
+                "--nologo",
+                "--nodefault",
+                "--nofirststartwizard",
                 "--convert-to",
                 "pdf",
                 "--outdir",
@@ -161,7 +173,7 @@ def _libreoffice_converter(docx_path: Path, output_dir: Path) -> None:
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=90,
+            timeout=40,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
