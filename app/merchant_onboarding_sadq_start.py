@@ -96,8 +96,7 @@ def _sadq_pending_page(db, merchant: finance.Merchant, message: str = "") -> str
             </p>
             {agreement_row}
             {notice}
-            <div style='margin:18px 0;padding:16px;border-radius:14px;background:#eef7ff;"
-                 "border:1px solid #d5e9fb'>
+            <div style='margin:18px 0;padding:16px;border-radius:14px;background:#eef7ff;border:1px solid #d5e9fb'>
               <strong>الخطوة الحالية</strong>
               <p class='muted' style='margin:7px 0 0'>
                 أكمل التحقق من هوية ممثل المنشأة عبر نفاذ ثم التوقيع الإلكتروني من
