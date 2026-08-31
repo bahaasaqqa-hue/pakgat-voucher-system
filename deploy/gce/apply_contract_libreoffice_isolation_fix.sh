@@ -68,7 +68,7 @@ echo "CONTRACT_LO_STALE_PROCESSES_AFTER=$STALE_AFTER"
 echo "CONTRACT_LO_FIX_TESTS_OK"
 
 # Real server-side LibreOffice smoke. This does not call Sadq and does not create an envelope.
-SMOKE_OUT="$($PY - <<'PY'
+SMOKE_OUT="$(cd "$REPO" && PYTHONPATH="$REPO" "$PY" - <<'PY'
 import time
 from app import merchant_contract_pdf as m
 
