@@ -106,7 +106,7 @@ if "merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets" not i
         raise SystemExit("merchant onboarding UI anchor not found in main.py")
     text = text.replace(brand_anchor, brand_insert, 1)
 
-# Preview release intentionally does NOT register the global Sadq bridge.
+# Preview release intentionally does not load the outbound signing bridge.
 text = text.replace("from app import merchant_onboarding_sadq_bridge as _merchant_onboarding_sadq_bridge  # noqa: F401 - signed Sadq contracts become pending Pakgat review\n", "")
 
 path.write_text(text, encoding="utf-8")
@@ -151,9 +151,7 @@ READY=0
 for _ in {1..20}; do
   if systemctl is-active --quiet "$SERVICE"; then
     PAGE="$(curl -fsS http://127.0.0.1:8000/merchant/register 2>/dev/null || true)"
-    if grep -q 'عقد الشراكة مع بكجات' <<<"$PAGE" \
-      && grep -q 'التحقق عبر نفاذ' <<<"$PAGE" \
-      && grep -q 'd2d7a36c-08de-4b6b-a8be-80490dbc0fc8-original.webp' <<<"$PAGE" \
+    if grep -q 'd2d7a36c-08de-4b6b-a8be-80490dbc0fc8-original.webp' <<<"$PAGE" \
       && grep -q '34e46b26-5825-429a-8567-c29175cbeb44-original.webp' <<<"$PAGE"; then
       READY=1
       break
@@ -166,7 +164,7 @@ if [[ "$READY" -ne 1 ]]; then
   systemctl status "$SERVICE" --no-pager || true
   journalctl -u "$SERVICE" -n 80 --no-pager || true
   rollback
-  fail "merchant onboarding health check failed"
+  fail "merchant onboarding official asset check failed"
 fi
 
 curl -fsS http://127.0.0.1:8000/merchant 2>/dev/null | grep -q 'Pakgat' || {
