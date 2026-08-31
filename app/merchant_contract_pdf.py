@@ -41,8 +41,20 @@ def _asset_dir() -> Path:
 
 
 def _template_bytes() -> bytes:
-    parts = sorted(_asset_dir().glob("merchant_contract_template_*.b64"))
-    if not parts:
+    names = (
+        "merchant_contract_template_00.b64",
+        "merchant_contract_template_01.b64",
+        "merchant_contract_template_02.b64",
+        "merchant_contract_template_03a.b64",
+        "merchant_contract_template_03b.b64",
+        "merchant_contract_template_03c.b64",
+        "merchant_contract_template_04.b64",
+        "merchant_contract_template_05.b64",
+        "merchant_contract_template_06.b64",
+        "merchant_contract_template_07.b64",
+    )
+    parts = [_asset_dir() / name for name in names]
+    if any(not part.is_file() for part in parts):
         raise ContractRenderError("Merchant contract template is missing")
     encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
     try:
