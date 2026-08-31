@@ -74,7 +74,7 @@ class SadqDynamicAuthTests(unittest.TestCase):
         self.assertEqual(client.get_access_token(), "token-2")
         self.assertEqual(len(transport.calls), 2)
 
-    def test_ensure_webhook_registers_callback_with_header_token_once(self):
+    def test_ensure_webhook_registers_callback_with_bearer_header_token_once(self):
         transport = FakeTransport([
             sadq_client.HttpResponse(200, b'{"access_token":"token","expires_in":3600}'),
             sadq_client.HttpResponse(200, b'{"data":[],"errorCode":0}'),
@@ -96,7 +96,7 @@ class SadqDynamicAuthTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["webhookUrl"], self.config().webhook_url)
         self.assertTrue(payload["isDefault"])
-        self.assertEqual(payload["HeaderToken"], "pakgat-webhook-secret")
+        self.assertEqual(payload["HeaderToken"], "Bearer pakgat-webhook-secret")
 
     def test_ensure_webhook_is_idempotent_when_callback_already_exists(self):
         transport = FakeTransport([
