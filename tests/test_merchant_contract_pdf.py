@@ -13,8 +13,8 @@ from app import merchant_contract_pdf
 
 
 class MerchantContractPDFTests(unittest.TestCase):
-    def test_real_template_is_filled_with_merchant_and_agreement_data(self):
-        data = merchant_contract_pdf.ContractData(
+    def _data(self):
+        return merchant_contract_pdf.ContractData(
             agreement_number="PKG-MA-2026-08-0042",
             agreement_date="31 / 08 / 2026",
             legal_name="شركة تجربة التاجر المحدودة",
@@ -31,11 +31,31 @@ class MerchantContractPDFTests(unittest.TestCase):
             representative_title="المدير العام",
         )
 
-        docx = merchant_contract_pdf.build_contract_docx(data)
+    def test_template_v2_removes_scout_offer_appendix_and_renumbers_terms(self):
+        template = merchant_contract_pdf._template_bytes()
+        with zipfile.ZipFile(io.BytesIO(template), "r") as archive:
+            xml = archive.read("word/document.xml").decode("utf-8")
+
+        for removed in (
+            "ثانياً: توثيق مندوب الاستقطاب",
+            "بيانات العرض / ملحق العرض",
+            "اسم مندوب الاستقطاب",
+            "Scout Code",
+            "اسم العرض",
+        ):
+            self.assertNotIn(removed, xml)
+
+        self.assertIn("ثالثاً: الشروط والأحكام", xml)
+        self.assertIn("1. التزامات الطرف الأول (Pakgat)", xml)
+        self.assertIn("13. أحكام عامة", xml)
+
+    def test_real_template_is_filled_with_merchant_agreement_and_signer_data(self):
+        docx = merchant_contract_pdf.build_contract_docx(self._data())
 
         self.assertTrue(docx.startswith(b"PK"))
         with zipfile.ZipFile(io.BytesIO(docx), "r") as archive:
             xml = archive.read("word/document.xml").decode("utf-8")
+
         for expected in (
             "PKG-MA-2026-08-0042",
             "31 / 08 / 2026",
@@ -49,26 +69,26 @@ class MerchantContractPDFTests(unittest.TestCase):
             "merchant@example.com",
             "https://merchant.example.com",
             "ممثل التاجر — المدير العام",
+            "ممثل التاجر",
+            "المدير العام",
+            "بهاء السقا",
+            "مدير تطوير الأعمال",
+            "0504161514",
         ):
             self.assertIn(expected, xml)
 
+        for placeholder in (
+            "{{PAKGAT_SIGNER_NAME}}",
+            "{{PAKGAT_SIGNER_TITLE}}",
+            "{{PAKGAT_SIGNER_PHONE}}",
+            "{{MERCHANT_REP_NAME}}",
+            "{{MERCHANT_REP_TITLE}}",
+            "{{MERCHANT_PHONE}}",
+            "{{AGREEMENT_DATE}}",
+        ):
+            self.assertNotIn(placeholder, xml)
+
     def test_render_contract_pdf_returns_pdf_and_uses_headless_converter(self):
-        data = merchant_contract_pdf.ContractData(
-            agreement_number="PKG-MA-2026-08-0042",
-            agreement_date="31 / 08 / 2026",
-            legal_name="شركة تجربة",
-            commercial_registration="1010999999",
-            activity="تجربة",
-            tax_number="312000000000003",
-            bank_name="بنك",
-            iban="SA1111111111111111111111",
-            national_address="الرياض",
-            contact_phone="0500000000",
-            contact_email="merchant@example.com",
-            website="",
-            representative_name="ممثل",
-            representative_title="مدير",
-        )
         calls = []
 
         def fake_converter(docx_path, output_dir):
@@ -76,7 +96,7 @@ class MerchantContractPDFTests(unittest.TestCase):
             pdf_path = output_dir / (docx_path.stem + ".pdf")
             pdf_path.write_bytes(b"%PDF-1.7\ncontract\n")
 
-        result = merchant_contract_pdf.render_contract_pdf(data, converter=fake_converter)
+        result = merchant_contract_pdf.render_contract_pdf(self._data(), converter=fake_converter)
 
         self.assertEqual(result, b"%PDF-1.7\ncontract\n")
         self.assertEqual(len(calls), 1)
