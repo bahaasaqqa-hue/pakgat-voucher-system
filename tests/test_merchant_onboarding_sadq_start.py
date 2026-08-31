@@ -147,11 +147,37 @@ class MerchantOnboardingSadqStartTests(unittest.TestCase):
         self.assertTrue(_sadq_start._is_sadq_pending(self.db, self.merchant))
         self.assertIn("بانتظار إكمال التحقق والتوقيع", html)
         self.assertIn("PKG-MA-2026-08-0042", html)
+        self.assertIn("متابعة التحقق والتوقيع عبر صادق", html)
+        self.assertIn("action='/merchant/onboarding/sadq/resume'", html)
         self.assertIn("تحديث حالة الطلب", html)
         self.assertNotIn("action='/merchant/onboarding/submit'", html)
         self.assertNotIn("action='/merchant/onboarding/profile'", html)
         self.assertNotIn("action='/merchant/onboarding/documents'", html)
         self.assertNotIn("يوجد عقد قائم لا يمكن استبداله من التسجيل", html)
+
+    def test_resume_sadq_signing_reuses_existing_document_without_new_envelope(self):
+        self.application.status = "sadq_pending"
+        self.contract.status = "sadq_pending"
+        self.contract.sadq_document_id = "doc-existing"
+        self.contract.sadq_transaction_id = "env-existing"
+        self.db.commit()
+        client = FakeSadqClient()
+
+        invitation_url = _sadq_start.resume_sadq_signing(
+            self.db,
+            self.merchant,
+            client=client,
+        )
+
+        self.assertEqual(invitation_url, "https://pakgat-sandbox.sadq.sa/sign/invite-789")
+        self.assertEqual(client.envelopes, [])
+        self.assertEqual(len(client.invitations), 1)
+        document_id, destination = client.invitations[0]
+        self.assertEqual(document_id, "doc-existing")
+        self.assertEqual(destination["destination_name"], "ممثل التاجر")
+        self.assertEqual(destination["destination_email"], "merchant@example.com")
+        self.assertEqual(destination["destination_phone"], "+966500000000")
+        self.assertEqual(destination["redirect_url"], "https://merchant.pakgat.com/merchant/onboarding")
 
 
 if __name__ == "__main__":
