@@ -143,7 +143,7 @@ sudo -u pakgat "$REPO/.venv/bin/python" -m py_compile "$LIVE" || {
   source /etc/pakgat/pakgat.env 2>/dev/null || true
   set +a
   cd "$REPO" || exit 1
-  sudo -u pakgat -E "$REPO/.venv/bin/python" - <<'PY'
+  "$REPO/.venv/bin/python" - <<'PY'
 from app.jood_whatsapp_context import JoodWhatsAppContext, merchant_campaign_choice_action
 
 ctx = JoodWhatsAppContext(
