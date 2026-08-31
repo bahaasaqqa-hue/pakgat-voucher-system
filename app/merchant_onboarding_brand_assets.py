@@ -35,6 +35,26 @@ _ASSET_CSS = f"""
   object-fit:contain;
   display:block;
 }}
+
+/* Blend the Salla-hosted mascot into the light hero background.
+   The source image has a white canvas, so multiply makes white pixels inherit
+   the page background while preserving the character colors. */
+.mascot{{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}}
+.mascot img[src='{MASCOT_IMAGE_URL}']{{
+  background:transparent!important;
+  mix-blend-mode:multiply;
+  border:0!important;
+  border-radius:0!important;
+  box-shadow:none!important;
+  object-fit:contain;
+  filter:drop-shadow(0 14px 24px rgba(15,37,84,.10));
+}}
+
 .nafath-official{{
   margin-top:14px;
   display:flex;
@@ -55,6 +75,7 @@ _ASSET_CSS = f"""
 }}
 @media(max-width:700px){{
   .brand img[src='{PAKGAT_LOGO_URL}']{{width:108px!important;max-height:50px}}
+  .mascot img[src='{MASCOT_IMAGE_URL}']{{filter:drop-shadow(0 10px 18px rgba(15,37,84,.08))}}
   .nafath-official img{{width:155px;max-width:78%}}
 }}
 """
