@@ -130,6 +130,52 @@ def _print(out: TextIO, marker: str) -> None:
     print(marker, file=out, flush=True)
 
 
+def _safe_provider_text(value, secrets: tuple[str, ...]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            text = str(value)
+    else:
+        text = str(value)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    for secret in sorted({str(v) for v in secrets if str(v or "")}, key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    if len(text) > 500:
+        text = text[:500] + "..."
+    return text
+
+
+def _print_auth_diagnostics(
+    out: TextIO,
+    payload: dict,
+    *,
+    secrets: tuple[str, ...],
+) -> None:
+    keys = ",".join(sorted(str(key) for key in payload.keys()))
+    _print(out, f"SADQ_AUTH_RESPONSE_KEYS={keys or '(none)'}")
+    fields = (
+        ("error", "SADQ_AUTH_PROVIDER_ERROR"),
+        ("errorCode", "SADQ_AUTH_PROVIDER_ERROR_CODE"),
+        ("errorMessage", "SADQ_AUTH_PROVIDER_MESSAGE"),
+        ("error_description", "SADQ_AUTH_PROVIDER_DESCRIPTION"),
+        ("message", "SADQ_AUTH_PROVIDER_MESSAGE"),
+        ("stateValidationErrors", "SADQ_AUTH_STATE_VALIDATION_ERRORS"),
+    )
+    printed = set()
+    for field, marker in fields:
+        value = payload.get(field)
+        if value in (None, "", [], {}):
+            continue
+        safe = _safe_provider_text(value, secrets)
+        if not safe or (marker, safe) in printed:
+            continue
+        printed.add((marker, safe))
+        _print(out, f"{marker}={safe}")
+
+
 def _normalized_url(value: str) -> str:
     parsed = urlsplit(str(value or "").strip())
     scheme = parsed.scheme.lower()
@@ -194,6 +240,18 @@ def run_read_only(
     auth_payload = _json_object(auth_response, "Sadq authentication")
     access_token = str(auth_payload.get("access_token") or "").strip()
     if not access_token:
+        _print_auth_diagnostics(
+            out,
+            auth_payload,
+            secrets=(
+                client_id,
+                client_secret,
+                username,
+                password,
+                account_id,
+                account_secret,
+            ),
+        )
         raise SmokeError(
             "Sadq authentication succeeded at HTTP level but no access_token was returned"
         )
