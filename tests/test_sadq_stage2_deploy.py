@@ -44,5 +44,21 @@ class SadqStage2DeployTests(unittest.TestCase):
         self.assertNotIn("-m unittest discover -s tests", self.text)
 
 
+class SadqPendingUILockDeployTests(unittest.TestCase):
+    def setUp(self):
+        self.path = pathlib.Path("deploy/gce/apply_sadq_pending_ui_lock_fix.sh")
+        self.text = self.path.read_text(encoding="utf-8")
+
+    def test_shell_syntax_is_valid(self):
+        result = subprocess.run(["bash", "-n", str(self.path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_targeted_test_loads_staged_module_not_production_module(self):
+        self.assertIn("importlib.util.spec_from_file_location", self.text)
+        self.assertIn("STAGED_SADQ_START", self.text)
+        self.assertIn("SADQ_PENDING_UI_STAGED_MODULE_LOADED=YES", self.text)
+        self.assertNotIn('"$PY" "$STAGE/tests/test_merchant_onboarding_sadq_start.py" -v', self.text)
+
+
 if __name__ == "__main__":
     unittest.main()
