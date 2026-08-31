@@ -231,8 +231,8 @@ systemctl restart "$SERVICE" || fail "Service restart failed"
 READY=0
 for _ in {1..20}; do
   if systemctl is-active --quiet "$SERVICE"; then
-    HTTP="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health 2>/dev/null || true)"
-    if [[ "$HTTP" == "200" ]]; then
+    HTTP="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/merchant 2>/dev/null || true)"
+    if [[ "$HTTP" == "200" || "$HTTP" == "303" || "$HTTP" == "307" ]]; then
       READY=1
       break
     fi
