@@ -132,16 +132,29 @@ class SadqSandboxSmokeTests(unittest.TestCase):
         )
         self.assertIn("SADQ_READ_ONLY_API_OK", out.getvalue())
 
-    def test_missing_access_token_fails_closed_without_echoing_response(self):
+    def test_missing_access_token_reports_safe_provider_error_without_leaking_secrets(self):
+        response = {
+            "access_token": None,
+            "error": "invalid_grant",
+            "errorMessage": "Invalid credentials for integration-password / account-secret",
+            "message": None,
+            "stateValidationErrors": None,
+        }
         transport = FakeTransport(
-            [smoke.HttpResponse(200, b'{"error":"bad secret value"}')]
+            [smoke.HttpResponse(200, json.dumps(response).encode())]
         )
         out = io.StringIO()
 
         with self.assertRaises(smoke.SmokeError):
             smoke.run_read_only(self.config(), transport=transport, out=out)
 
-        self.assertNotIn("bad secret value", out.getvalue())
+        rendered = out.getvalue()
+        self.assertIn("SADQ_AUTH_RESPONSE_KEYS=", rendered)
+        self.assertIn("SADQ_AUTH_PROVIDER_ERROR=invalid_grant", rendered)
+        self.assertIn("SADQ_AUTH_PROVIDER_MESSAGE=Invalid credentials for [REDACTED] / [REDACTED]", rendered)
+        self.assertNotIn("integration-password", rendered)
+        self.assertNotIn("account-secret", rendered)
+        self.assertNotIn("client-secret", rendered)
 
 
 if __name__ == "__main__":
