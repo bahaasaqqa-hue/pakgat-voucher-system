@@ -47,7 +47,31 @@ echo "SADQ_PENDING_UI_STAGED_OK"
   export DATABASE_URL="sqlite:///:memory:"
   export MERCHANT_PORTAL_SECRET="test-only-merchant-portal-secret"
   export PYTHONPATH="$REPO"
-  "$PY" "$STAGE/tests/test_merchant_onboarding_sadq_start.py" -v
+  export STAGED_SADQ_START="$STAGE/app/merchant_onboarding_sadq_start.py"
+  export STAGED_TEST="$STAGE/tests/test_merchant_onboarding_sadq_start.py"
+  "$PY" - <<'PY'
+import importlib.util
+import os
+import runpy
+import sys
+
+import app
+
+module_name = "app.merchant_onboarding_sadq_start"
+module_path = os.environ["STAGED_SADQ_START"]
+spec = importlib.util.spec_from_file_location(module_name, module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("could not load staged Sadq onboarding module")
+module = importlib.util.module_from_spec(spec)
+sys.modules[module_name] = module
+setattr(app, "merchant_onboarding_sadq_start", module)
+spec.loader.exec_module(module)
+print("SADQ_PENDING_UI_STAGED_MODULE_LOADED=YES")
+
+staged_test = os.environ["STAGED_TEST"]
+sys.argv = [staged_test, "-v"]
+runpy.run_path(staged_test, run_name="__main__")
+PY
 ) || fail "targeted Sadq onboarding tests failed"
 echo "SADQ_PENDING_UI_TARGETED_TESTS_OK"
 
