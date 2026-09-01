@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -9,6 +10,15 @@ SCRIPT = ROOT / "deploy" / "gce" / "apply_contract_v2_and_reset_sandbox_envelope
 class ContractV2SandboxResetDeployTests(unittest.TestCase):
     def _source(self):
         return SCRIPT.read_text(encoding="utf-8")
+
+    def test_shell_syntax_is_valid(self):
+        result = subprocess.run(
+            ["bash", "-n", str(SCRIPT)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rollout_is_bounded_and_hard_gated_to_current_test_contract(self):
         source = self._source()
