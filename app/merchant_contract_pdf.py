@@ -47,22 +47,12 @@ def _asset_dir() -> Path:
 
 def _template_bytes() -> bytes:
     names = (
-        "merchant_contract_template_00.b64",
-        "merchant_contract_template_01.b64",
-        "merchant_contract_template_02.b64",
-        "merchant_contract_template_03a1.b64",
-        "merchant_contract_template_03a2.b64",
-        "merchant_contract_template_03b.b64",
-        "merchant_contract_template_03c_1.b64",
-        "merchant_contract_template_03c_2.b64",
-        "merchant_contract_template_04_1.b64",
-        "merchant_contract_template_04_2.b64",
-        "merchant_contract_template_05_1.b64",
-        "merchant_contract_template_05_2.b64",
-        "merchant_contract_template_06_1.b64",
-        "merchant_contract_template_06_2.b64",
-        "merchant_contract_template_07_1.b64",
-        "merchant_contract_template_07_2.b64",
+        "merchant_contract_v2_00.b64",
+        "merchant_contract_v2_01.b64",
+        "merchant_contract_v2_02.b64",
+        "merchant_contract_v2_03a.b64",
+        "merchant_contract_v2_03b.b64",
+        "merchant_contract_v2_04.b64",
     )
     parts = [_asset_dir() / name for name in names]
     if any(not part.is_file() for part in parts):
