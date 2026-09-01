@@ -3,20 +3,29 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import io
-import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
-
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 PAKGAT_SIGNER_NAME = "بهاء السقا"
 PAKGAT_SIGNER_TITLE = "مدير تطوير الأعمال"
 PAKGAT_SIGNER_PHONE = "0504161514"
+
+TEMPLATE_PARTS = (
+    "merchant_contract_final_00.b64",
+    "merchant_contract_final_01.b64",
+    "merchant_contract_final_02.b64",
+    "merchant_contract_final_03a.b64",
+    "merchant_contract_final_03b.b64",
+    "merchant_contract_final_04.b64",
+)
+TEMPLATE_SHA256 = "24681ccf9215e84b624fd26cb9cb35137f24b44db72191e973d99cc0be16fcfe"
 
 
 class ContractRenderError(RuntimeError):
@@ -46,15 +55,8 @@ def _asset_dir() -> Path:
 
 
 def _template_bytes() -> bytes:
-    names = (
-        "merchant_contract_v2_00.b64",
-        "merchant_contract_v2_01.b64",
-        "merchant_contract_v2_02.b64",
-        "merchant_contract_v2_03a.b64",
-        "merchant_contract_v2_03b.b64",
-        "merchant_contract_v2_04.b64",
-    )
-    parts = [_asset_dir() / name for name in names]
+    """Reassemble one approved DOCX from checksum-locked parts and fail closed."""
+    parts = [_asset_dir() / name for name in TEMPLATE_PARTS]
     if any(not part.is_file() for part in parts):
         raise ContractRenderError("Merchant contract template is missing")
     encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
@@ -62,8 +64,16 @@ def _template_bytes() -> bytes:
         payload = base64.b64decode(encoded, validate=True)
     except Exception:
         raise ContractRenderError("Merchant contract template is invalid") from None
-    if not payload.startswith(b"PK"):
-        raise ContractRenderError("Merchant contract template is not a DOCX file")
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != TEMPLATE_SHA256:
+        raise ContractRenderError("Merchant contract template checksum mismatch")
+    try:
+        with ZipFile(io.BytesIO(payload), "r") as archive:
+            if archive.testzip() is not None:
+                raise ContractRenderError("Merchant contract template is invalid")
+            archive.getinfo("word/document.xml")
+    except (BadZipFile, KeyError):
+        raise ContractRenderError("Merchant contract template is invalid") from None
     return payload
 
 
@@ -71,98 +81,54 @@ def _xml_escape(value: str) -> str:
     return html.escape(str(value or "").strip(), quote=False)
 
 
-def _replace_row_value(xml: str, label: str, value: str) -> str:
-    row_pattern = re.compile(r"<w:tr\b.*?</w:tr>", re.DOTALL)
-    replacement = _xml_escape(value)
-    replaced = False
-
-    def replace_row(match: re.Match[str]) -> str:
-        nonlocal replaced
-        row = match.group(0)
-        if replaced or label not in row:
-            return row
-        new_row, count = re.subn(
-            r"(<w:t(?:\s[^>]*)?>)_{5,}(</w:t>)",
-            lambda item: item.group(1) + replacement + item.group(2),
-            row,
-            count=1,
-        )
-        if count:
-            replaced = True
-            return new_row
-        return row
-
-    result = row_pattern.sub(replace_row, xml)
-    if not replaced:
-        raise ContractRenderError(f"Merchant contract template field is missing: {label}")
-    return result
-
-
 def _replace_required_placeholder(xml: str, placeholder: str, value: str) -> str:
     if placeholder not in xml:
-        raise ContractRenderError(f"Merchant contract template placeholder is missing: {placeholder}")
+        raise ContractRenderError(
+            f"Merchant contract template placeholder is missing: {placeholder}"
+        )
     return xml.replace(placeholder, _xml_escape(value))
 
 
 def build_contract_docx(data: ContractData) -> bytes:
     source = io.BytesIO(_template_bytes())
     output = io.BytesIO()
+    replacements = (
+        ("{{AGREEMENT_NUMBER}}", data.agreement_number),
+        ("{{AGREEMENT_DATE}}", data.agreement_date),
+        ("{{MERCHANT_NAME}}", data.legal_name),
+        ("{{MERCHANT_CR}}", data.commercial_registration),
+        ("{{MERCHANT_ACTIVITY}}", data.activity),
+        ("{{MERCHANT_TAX_NUMBER}}", data.tax_number),
+        ("{{MERCHANT_BANK}}", data.bank_name),
+        ("{{MERCHANT_IBAN}}", data.iban),
+        ("{{MERCHANT_ADDRESS}}", data.national_address),
+        ("{{MERCHANT_PHONE}}", data.contact_phone),
+        ("{{MERCHANT_EMAIL}}", data.contact_email),
+        ("{{MERCHANT_WEBSITE}}", data.website or "لا يوجد"),
+        ("{{MERCHANT_REP_NAME}}", data.representative_name),
+        ("{{MERCHANT_REP_TITLE}}", data.representative_title),
+    )
     with ZipFile(source, "r") as archive, ZipFile(output, "w", ZIP_DEFLATED) as rendered:
         for info in archive.infolist():
             payload = archive.read(info.filename)
             if info.filename == "word/document.xml":
                 xml = payload.decode("utf-8")
-                agreement_placeholder = "رقم الاتفاقية: ______________"
-                date_placeholder = "التاريخ: ____ / ____ / 20____"
-                if agreement_placeholder not in xml or date_placeholder not in xml:
-                    raise ContractRenderError("Merchant contract header placeholders are missing")
-                xml = xml.replace(
-                    agreement_placeholder,
-                    "رقم الاتفاقية: " + _xml_escape(data.agreement_number),
-                    1,
-                )
-                xml = xml.replace(
-                    date_placeholder,
-                    "التاريخ: " + _xml_escape(data.agreement_date),
-                    1,
-                )
-                fields = (
-                    ("اسم المنشأة / الطرف الثاني", data.legal_name),
-                    ("السجل التجاري / الرقم الموحد", data.commercial_registration),
-                    ("النشاط", data.activity),
-                    ("الرقم الضريبي", data.tax_number),
-                    ("البنك وIBAN", f"{data.bank_name} — {data.iban}"),
-                    ("العنوان", data.national_address),
-                    ("رقم الجوال", data.contact_phone),
-                    ("البريد الإلكتروني", data.contact_email),
-                    ("الموقع الإلكتروني", data.website or "لا يوجد"),
-                    (
-                        "اسم الممثل وصفته",
-                        f"{data.representative_name} — {data.representative_title}",
-                    ),
-                )
-                for label, value in fields:
-                    xml = _replace_row_value(xml, label, value)
-
-                signature_fields = (
-                    ("{{PAKGAT_SIGNER_NAME}}", PAKGAT_SIGNER_NAME),
-                    ("{{PAKGAT_SIGNER_TITLE}}", PAKGAT_SIGNER_TITLE),
-                    ("{{PAKGAT_SIGNER_PHONE}}", PAKGAT_SIGNER_PHONE),
-                    ("{{MERCHANT_REP_NAME}}", data.representative_name),
-                    ("{{MERCHANT_REP_TITLE}}", data.representative_title),
-                    ("{{MERCHANT_PHONE}}", data.contact_phone),
-                    ("{{AGREEMENT_DATE}}", data.agreement_date),
-                )
-                for placeholder, value in signature_fields:
+                for placeholder, value in replacements:
                     xml = _replace_required_placeholder(xml, placeholder, value)
-
                 if "{{" in xml or "}}" in xml:
                     raise ContractRenderError("Merchant contract contains unresolved placeholders")
+                for fixed in (PAKGAT_SIGNER_NAME, PAKGAT_SIGNER_TITLE, PAKGAT_SIGNER_PHONE):
+                    if fixed not in xml:
+                        raise ContractRenderError("Merchant contract Pakgat representative data is missing")
                 payload = xml.encode("utf-8")
             rendered.writestr(info, payload)
     result = output.getvalue()
-    if not result.startswith(b"PK"):
-        raise ContractRenderError("Generated merchant contract is invalid")
+    try:
+        with ZipFile(io.BytesIO(result), "r") as rendered:
+            if rendered.testzip() is not None:
+                raise ContractRenderError("Generated merchant contract is invalid")
+    except BadZipFile:
+        raise ContractRenderError("Generated merchant contract is invalid") from None
     return result
 
 
@@ -170,14 +136,9 @@ def _libreoffice_converter(docx_path: Path, output_dir: Path) -> None:
     executable = shutil.which("libreoffice") or shutil.which("soffice")
     if not executable:
         raise ContractRenderError("LibreOffice is not installed on the server")
-
-    # LibreOffice serializes work through its user profile. A shared/default
-    # profile can deadlock concurrent web requests. Give every conversion a
-    # private profile inside the request temp directory so attempts are isolated.
     profile_dir = output_dir / "libreoffice-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
     profile_uri = profile_dir.resolve().as_uri()
-
     try:
         process = subprocess.run(
             [
@@ -221,6 +182,8 @@ def render_contract_pdf(data: ContractData, *, converter=_libreoffice_converter)
 
 
 __all__ = [
+    "TEMPLATE_PARTS",
+    "TEMPLATE_SHA256",
     "PAKGAT_SIGNER_NAME",
     "PAKGAT_SIGNER_TITLE",
     "PAKGAT_SIGNER_PHONE",
