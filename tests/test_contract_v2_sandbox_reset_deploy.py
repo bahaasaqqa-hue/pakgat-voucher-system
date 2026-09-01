@@ -27,7 +27,8 @@ class ContractV2SandboxResetDeployTests(unittest.TestCase):
         self.assertIn('EXPECTED_AGREEMENT="PKG-MA-2026-08-0001"', source)
         self.assertIn('EXPECTED_OLD_DOCUMENT_ID="dae9d097-d7ca-4543-a2be-37f69a295244"', source)
         self.assertIn('EXPECTED_OLD_ENVELOPE_ID="9500c022-af56-4254-bf2c-cc8becba7ba7"', source)
-        self.assertIn("CONTRACT_V2_PROD_PDF_PAGES=4", source)
+        self.assertIn('print(f"CONTRACT_V2_PROD_PDF_PAGES={pages}")', source)
+        self.assertIn('if [ "$PDF_PAGES" != "4" ]', source)
 
     def test_pdf_gate_happens_before_new_sadq_envelope(self):
         source = self._source()
