@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 
 from app import merchant_contract_pdf as contract_pdf
-from app.merchant_brand_logo import PAKGAT_LOGO_DATA_URI
 
 
 def _ltr(value: str) -> str:
@@ -99,7 +98,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     agreement = _ltr(data.agreement_number)
     return f'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>{css}</style></head><body>
 <section class="page">
-  <table class="brand"><tr><td><img class="brand-logo" src="pakgat-logo.webp" alt="Pakgat"></td><td class="page-label">اتفاقية شراكة تجارية</td></tr></table>
+  <table class="brand"><tr><td><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat"></td><td class="page-label">اتفاقية شراكة تجارية</td></tr></table>
   <h1>اتفاقية شراكة</h1>
   <div class="subtitle">لترويج وبيع العروض والقسائم الإلكترونية بين شركة تام العاصمة التجارية (Pakgat) والتاجر</div>
   <table class="meta"><tr><td><b>رقم الاتفاقية</b><br>{agreement}</td><td><b>التاريخ</b><br>{_ltr(data.agreement_date)}</td></tr></table>
@@ -149,13 +148,13 @@ def render_contract_pdf_otp(data: contract_pdf.ContractData, *, converter=contra
         source_path = root / "merchant-agreement.html"
         source_path.write_text(build_contract_html_otp(data), encoding="utf-8")
 
-        # LibreOffice renders a normal local image more reliably than a large data URI.
-        uri = PAKGAT_LOGO_DATA_URI
+        # LibreOffice renders a normal local JPEG more reliably than a large data URI.
+        uri = contract_pdf._logo_data_uri()
         try:
             logo_payload = base64.b64decode(uri.split(",", 1)[1])
         except Exception:
             raise contract_pdf.ContractRenderError("Pakgat contract logo is invalid") from None
-        (root / "pakgat-logo.webp").write_bytes(logo_payload)
+        (root / "pakgat-logo.jpg").write_bytes(logo_payload)
 
         converter(source_path, root)
         pdf_path = root / "merchant-agreement.pdf"
