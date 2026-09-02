@@ -17,9 +17,25 @@ def _row(label: str, value: str, *, ltr: bool = False) -> str:
     return f'<tr><th>{contract_pdf._e(label)}</th><td>{rendered}</td></tr>'
 
 
-def _clause(number: int, title: str, body: str) -> str:
+def _paired_rows(items: list[tuple[str, str, bool]]) -> str:
+    rows = []
+    for index in range(0, len(items), 2):
+        cells = []
+        for label, value, ltr in items[index:index + 2]:
+            rendered = _ltr(value) if ltr else contract_pdf._e(value)
+            cells.append(f'<th>{contract_pdf._e(label)}</th><td>{rendered}</td>')
+        if len(cells) == 1:
+            cells.append('<th></th><td></td>')
+        rows.append('<tr>' + ''.join(cells) + '</tr>')
+    return ''.join(rows)
+
+
+def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
+    classes = "clause"
+    heading = f'<div class="terms-title">{contract_pdf._e(page_title)}</div>' if page_title else ""
     return (
-        '<div class="clause">'
+        f'<div class="{classes}">'
+        f'{heading}'
         f'<h3>{number}. {contract_pdf._e(title)}</h3>'
         f'<p>{contract_pdf._e(body)}</p>'
         '</div>'
@@ -27,23 +43,29 @@ def _clause(number: int, title: str, body: str) -> str:
 
 
 def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
-    merchant_rows = "".join([
-        _row("اسم المنشأة", data.legal_name),
-        _row("السجل التجاري / الرقم الموحد", data.commercial_registration, ltr=True),
-        _row("النشاط", data.activity),
-        _row("الرقم الضريبي", data.tax_number, ltr=True),
-        _row("البنك", data.bank_name),
-        _row("IBAN", data.iban, ltr=True),
-        _row("العنوان", data.national_address),
-        _row("رقم الجوال", data.contact_phone, ltr=True),
-        _row("البريد الإلكتروني", data.contact_email, ltr=True),
-        _row("الموقع الإلكتروني", data.website or "لا يوجد", ltr=True),
-        _row("اسم الممثل", data.representative_name),
-        _row("صفة الممثل", data.representative_title),
+    merchant_rows = _paired_rows([
+        ("اسم المنشأة", data.legal_name, False),
+        ("السجل التجاري / الرقم الموحد", data.commercial_registration, True),
+        ("النشاط", data.activity, False),
+        ("الرقم الضريبي", data.tax_number, True),
+        ("البنك", data.bank_name, False),
+        ("IBAN", data.iban, True),
+        ("العنوان", data.national_address, False),
+        ("رقم الجوال", data.contact_phone, True),
+        ("البريد الإلكتروني", data.contact_email, True),
+        ("الموقع الإلكتروني", data.website or "لا يوجد", True),
+        ("اسم الممثل", data.representative_name, False),
+        ("صفة الممثل", data.representative_title, False),
+    ])
+    pakgat_rows = _paired_rows([
+        ("السجل التجاري", "1009100740", True),
+        ("الرقم الضريبي", "312531659100003", True),
+        ("IBAN", "SA1710000026700000717001", True),
+        ("الموقع الإلكتروني", "https://pakgat.com", True),
     ])
 
     clauses_1 = "".join([
-        _clause(1, "التزامات الطرف الأول (Pakgat)", "تتولى Pakgat تصميم ونشر وتسويق العروض عبر المنصة، وإصدار القسائم الإلكترونية وتوفير نظام التحقق منها، وتحصيل قيمة الطلبات وتحويل صافي مستحقات التاجر وفق البيانات المالية المعتمدة، مع تقديم دعم المنصة. ولا تضمن Pakgat عدداً محدداً من المبيعات أو العملاء."),
+        _clause(1, "التزامات الطرف الأول (Pakgat)", "تتولى Pakgat تصميم ونشر وتسويق العروض عبر المنصة، وإصدار القسائم الإلكترونية وتوفير نظام التحقق منها، وتحصيل قيمة الطلبات وتحويل صافي مستحقات التاجر وفق البيانات المالية المعتمدة، مع تقديم دعم المنصة. ولا تضمن Pakgat عدداً محدداً من المبيعات أو العملاء.", page_title="ثالثاً: الشروط والأحكام (1)"),
         _clause(2, "التزامات الطرف الثاني (التاجر)", "يلتزم التاجر بتقديم الخدمة أو المنتج بالمواصفات والسعر والشروط المعتمدة، وقبول القسائم الصالحة دون رسوم غير معلنة، وضمان صحة بياناته وأسعاره وتراخيصه والمحافظة على وسائل التحقق، ويتحمل المسؤولية النظامية عن جودة ما يقدمه وأي مطالبات ناشئة عنه."),
         _clause(3, "القسائم الإلكترونية", "تصدر لكل عملية شراء قسيمة برمز تحقق فريد تستخدم لمرة واحدة، وتعد مستخدمة بعد اعتمادها عبر النظام، ولا يجوز إعادة استخدامها أو قبولها بعد انتهاء صلاحيتها إلا باستثناء مكتوب من Pakgat لحماية حقوق العميل."),
         _clause(4, "التسوية المالية", "تحول Pakgat صافي مستحقات التاجر إلى الآيبان المسجل وفق دورة التسوية المعتمدة بعد خصم المبالغ المستردة والإلغاءات والأخطاء المحاسبية والرسوم المتفق عليها. ويعد كشف التسوية أساساً للمراجعة، ويكون الاعتراض خلال 7 أيام عمل من إرساله."),
@@ -53,7 +75,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     ])
 
     clauses_2 = "".join([
-        _clause(8, "حدود الصلاحيات والتعديلات", "لا يعتد بأي تعديل على الشروط التجارية أو الخصومات أو الالتزامات أو الوعود بالمبيعات أو الميزانيات الإعلانية أو الحصرية أو آجال السداد إلا بموافقة كتابية صادرة من Pakgat. ولا يجوز لأي شخص غير مفوض قبض مبالغ باسم Pakgat أو إبرام التزام مالي أو قانوني باسمها."),
+        _clause(8, "حدود الصلاحيات والتعديلات", "لا يعتد بأي تعديل على الشروط التجارية أو الخصومات أو الالتزامات أو الوعود بالمبيعات أو الميزانيات الإعلانية أو الحصرية أو آجال السداد إلا بموافقة كتابية صادرة من Pakgat. ولا يجوز لأي شخص غير مفوض قبض مبالغ باسم Pakgat أو إبرام التزام مالي أو قانوني باسمها.", page_title="ثالثاً: الشروط والأحكام (2)"),
         _clause(9, "عدم الحصرية", "ما لم يتفق الطرفان كتابة على خلاف ذلك، تعد هذه الاتفاقية غير حصرية، ويجوز لكل طرف التعامل مع أطراف أخرى شريطة عدم استخدام المعلومات السرية للطرف الآخر أو الإخلال بالطلبات والعروض القائمة وحقوق العملاء."),
         _clause(10, "مدة الاتفاقية وإنهاؤها", "تسري الاتفاقية من تاريخ توقيعها وتستمر حتى انتهاء العروض النشطة وتسوية الالتزامات المالية المتعلقة بها. ويجوز لأي من الطرفين إنهاؤها عند الإخلال الجوهري أو مخالفة الأنظمة أو توقف النشاط أو إساءة استخدام المنصة، مع بقاء حقوق العملاء والمستحقات والالتزامات السابقة نافذة حتى تسويتها."),
         _clause(11, "القوة القاهرة", "لا يتحمل أي من الطرفين مسؤولية التأخير أو عدم التنفيذ الناتج مباشرة عن ظروف خارجة عن الإرادة لا يمكن توقعها أو دفعها بصورة معقولة، مع التزام الطرف المتأثر بإشعار الطرف الآخر واتخاذ ما يمكن لتقليل الأثر."),
@@ -62,65 +84,74 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     ])
 
     css = """
-    @page { size:A4; margin:10mm 12mm 11mm; }
+    @page { size:A4; margin:10mm 13mm 10mm; }
     html, body { margin:0; padding:0; }
-    body { font-family:Arial,'Noto Sans Arabic',sans-serif; color:#132a52; direction:rtl; background:#fff; font-size:10.5pt; }
-    .page { page-break-after:always; }
-    .page:last-child { page-break-after:auto; }
-    .brand { width:100%; border-collapse:collapse; margin:0 0 8px; border-bottom:2px solid #1550bf; }
-    .brand td { padding:2px 0 5px; vertical-align:middle; }
-    .brand-logo { width:122px; height:56px; object-fit:contain; display:block; }
-    .page-label { text-align:left; color:#60769c; font-size:9pt; }
-    h1 { margin:3px 0 2px; text-align:center; color:#0c43a5; font-size:22pt; }
-    .subtitle { text-align:center; font-weight:bold; font-size:10.5pt; margin-bottom:7px; }
-    .meta { width:100%; border-collapse:collapse; margin-bottom:7px; }
-    .meta td { width:50%; border:1px solid #c8d7ef; background:#f4f7fc; padding:6px 8px; text-align:center; }
-    .section-title { background:#0c43a5; color:#fff; padding:5px 8px; font-weight:bold; font-size:11.5pt; margin:6px 0 4px; }
-    .card { border:1px solid #c8d7ef; padding:6px 8px; margin-bottom:5px; }
-    .card h2 { color:#0c43a5; font-size:11pt; margin:0 0 4px; }
-    table.data { width:100%; border-collapse:collapse; font-size:9pt; }
-    table.data th, table.data td { border:1px solid #d6deeb; padding:3px 5px; vertical-align:top; }
-    table.data th { width:31%; background:#f5f7fb; color:#173d7d; }
-    .intro, .manual-note { border:1px solid #c8d7ef; padding:6px 8px; line-height:1.55; margin-bottom:5px; }
-    .manual-note { background:#f4f7fc; border-right:4px solid #1550bf; }
-    .clause { border-bottom:1px solid #d5deed; padding:5px 0 6px; page-break-inside:avoid; }
-    .clause h3 { color:#0c43a5; margin:0 0 2px; font-size:11pt; }
-    .clause p { margin:0; color:#263c61; font-size:9.2pt; line-height:1.48; }
-    .approval-table { width:100%; border-collapse:collapse; margin-top:6px; }
-    .approval-table td { width:50%; border:1px solid #c8d7ef; padding:7px; vertical-align:top; }
-    .approval-table h3 { margin:0 0 5px; color:#0c43a5; font-size:11pt; }
-    .approval-line { margin:3px 0; font-size:9.3pt; line-height:1.5; }
-    .activation { margin-top:6px; padding:6px 8px; background:#eef4ff; border:1px solid #b9cff0; color:#0c43a5; font-weight:bold; font-size:9.5pt; }
-    .footer { margin-top:7px; border-top:1px solid #d6deeb; padding-top:3px; color:#62779b; font-size:8pt; }
+    body { font-family:Arial,'Noto Sans Arabic',sans-serif; color:#172b4d; direction:rtl; background:#fff; font-size:9.5pt; text-align:right; }
+    .page { page-break-after:auto; }
+    .page-break { page-break-before:always; height:1px; margin:0; padding:0; font-size:1px; line-height:1px; color:#fff; }
+    .brand { width:100%; table-layout:fixed; border-collapse:collapse; margin:0 0 6px; border-bottom:1.5px solid #164da8; }
+    .brand td { padding:0 0 5px; vertical-align:middle; }
+    .brand-logo-cell { width:55%; text-align:right; }
+    .brand-logo { width:110px; height:52px; object-fit:contain; display:block; margin:0; }
+    .page-label { width:45%; text-align:left; color:#536b91; font-size:8.5pt; font-weight:bold; }
+    h1 { margin:4px 0 2px; text-align:center; color:#0b3f96; font-size:20pt; }
+    .subtitle { text-align:center; color:#263b61; font-weight:bold; font-size:9.5pt; margin:0 0 7px; }
+    .meta { width:100%; table-layout:fixed; border-collapse:collapse; margin-bottom:7px; }
+    .meta td { width:50%; border:1px solid #d3dce9; background:#f7f9fc; padding:5px 8px; text-align:center; }
+    .meta b { color:#0b3f96; }
+    .section-title { width:100%; table-layout:fixed; border-collapse:collapse; margin:6px 0 4px; }
+    .section-title td { background:#fff; color:#0b3f96; border-bottom:2px solid #0b3f96; padding:4px 2px; font-weight:bold; font-size:10.5pt; text-align:right; }
+    .card { border:1px solid #d3dce9; padding:5px 7px; margin-bottom:5px; background:#fff; }
+    .party-title { color:#0b3f96; font-size:9pt; font-weight:bold; margin:0 0 4px; padding-bottom:3px; border-bottom:1px solid #e4e9f1; text-align:right; }
+    table.data { width:100%; table-layout:fixed; border-collapse:collapse; font-size:8.2pt; }
+    table.data th, table.data td { border-bottom:1px solid #e4e9f1; padding:3px 5px; vertical-align:middle; text-align:right; }
+    table.data th { width:19%; background:#f7f9fc; color:#254a80; font-weight:bold; }
+    table.data td { width:31%; color:#172b4d; }
+    .intro, .manual-note { padding:6px 8px; line-height:1.45; margin-bottom:5px; text-align:right; }
+    .intro { border:1px solid #d8e0eb; }
+    .manual-note { background:#f7f9fc; border:1px solid #d3dce9; border-right:3px solid #164da8; }
+    .clause { border-bottom:1px solid #dce3ed; padding:4px 0 5px; page-break-inside:avoid; text-align:right; }
+    .clause h3 { color:#0b3f96; margin:0 0 1px; font-size:10pt; }
+    .clause p { margin:0; color:#263b61; font-size:8.3pt; line-height:1.36; text-align:right; }
+    .terms-title { color:#0b3f96; border-bottom:2px solid #0b3f96; padding:3px 0 4px; margin-bottom:5px; font-weight:bold; font-size:10.5pt; text-align:right; }
+    .approval-table { width:100%; table-layout:fixed; border-collapse:collapse; margin-top:5px; }
+    .approval-table td { width:50%; border:1px solid #d3dce9; padding:6px 7px; vertical-align:top; text-align:right; }
+    .approval-table h3 { margin:0 0 4px; color:#0b3f96; font-size:9.5pt; padding-bottom:3px; border-bottom:1px solid #e4e9f1; }
+    .approval-line { margin:2px 0; font-size:8.3pt; line-height:1.35; }
+    .activation { margin-top:5px; padding:5px 7px; background:#f7f9fc; border:1px solid #d3dce9; border-right:3px solid #164da8; color:#0b3f96; font-weight:bold; font-size:8.2pt; }
+    .footer { width:100%; table-layout:fixed; border-collapse:collapse; margin-top:6px; border-top:1px solid #d3dce9; color:#617391; font-size:7.5pt; }
+    .footer td { width:33.33%; padding-top:3px; }
+    .footer .center { text-align:center; }
+    .page-number { text-align:left; }
+    .page-two-end { margin-bottom:28mm; }
     .ltr { direction:ltr; unicode-bidi:embed; display:inline-block; }
     """
 
     agreement = _ltr(data.agreement_number)
     return f'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>{css}</style></head><body>
 <section class="page">
-  <table class="brand"><tr><td><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat"></td><td class="page-label">اتفاقية شراكة تجارية</td></tr></table>
+  <table class="brand"><tr><td class="brand-logo-cell"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat"></td><td class="page-label">اتفاقية شراكة تجارية</td></tr></table>
   <h1>اتفاقية شراكة</h1>
   <div class="subtitle">لترويج وبيع العروض والقسائم الإلكترونية بين شركة تام العاصمة التجارية (Pakgat) والتاجر</div>
   <table class="meta"><tr><td><b>رقم الاتفاقية</b><br>{agreement}</td><td><b>التاريخ</b><br>{_ltr(data.agreement_date)}</td></tr></table>
-  <div class="section-title">أولاً: أطراف الاتفاقية</div>
-  <div class="card"><h2>الطرف الأول: شركة تام العاصمة التجارية – المالكة لمنصة Pakgat.com</h2><table class="data">
-    {_row('السجل التجاري','1009100740',ltr=True)}{_row('الرقم الضريبي','312531659100003',ltr=True)}{_row('IBAN','SA1710000026700000717001',ltr=True)}{_row('الموقع الإلكتروني','https://pakgat.com',ltr=True)}
+  <table class="section-title"><tr><td>أولاً: أطراف الاتفاقية</td></tr></table>
+  <div class="card"><div class="party-title">الطرف الأول: شركة تام العاصمة التجارية – المالكة لمنصة Pakgat.com</div><table class="data">
+    {pakgat_rows}
   </table></div>
-  <div class="card"><h2>الطرف الثاني: التاجر</h2><table class="data">{merchant_rows}</table></div>
-  <div class="section-title">ثانياً: التمهيد</div>
+  <div class="card"><div class="party-title">الطرف الثاني: التاجر</div><table class="data">{merchant_rows}</table></div>
+  <table class="section-title"><tr><td>ثانياً: التمهيد</td></tr></table>
   <div class="intro">حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.</div>
   <div class="manual-note"><b>إجراء التوقيع والاعتماد:</b> يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل. نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية. لا يتم تفعيل حساب التاجر تلقائياً.</div>
-  <div class="footer">بكجات | Pakgat.com | {agreement}</div>
+  <table class="footer"><tr><td>بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 1 من 3</td></tr></table>
 </section>
 <section class="page">
-  <div class="section-title">ثالثاً: الشروط والأحكام (1)</div>
+  <p class="page-break">&nbsp;</p>
   {clauses_1}
-  <div class="footer">بكجات | Pakgat.com | {agreement}</div>
+  <table class="footer page-two-end"><tr><td>بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 2 من 3</td></tr></table>
 </section>
 <section class="page">
-  <div class="section-title">ثالثاً: الشروط والأحكام (2)</div>
   {clauses_2}
-  <div class="section-title">رابعاً: الموافقة الإلكترونية والاعتماد النهائي</div>
+  <table class="section-title"><tr><td>رابعاً: الموافقة الإلكترونية والاعتماد النهائي</td></tr></table>
   <table class="approval-table"><tr>
     <td><h3>الطرف الأول – شركة تام العاصمة التجارية (Pakgat)</h3>
       <div class="approval-line">الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</div>
@@ -137,7 +168,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     </td>
   </tr></table>
   <div class="activation">حالة التفعيل: نجاح OTP يثبت موافقة التاجر على الاتفاقية ولا يفعّل الحساب تلقائياً. يصبح الحساب Active فقط بعد الموافقة النهائية من Pakgat على طلب التسجيل.</div>
-  <div class="footer">بكجات | Pakgat.com | {agreement}</div>
+  <table class="footer"><tr><td>بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 3 من 3</td></tr></table>
 </section>
 </body></html>'''
 
