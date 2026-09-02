@@ -69,7 +69,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .page:last-child { page-break-after:auto; }
     .brand { width:100%; border-collapse:collapse; margin:0 0 8px; border-bottom:2px solid #1550bf; }
     .brand td { padding:2px 0 5px; vertical-align:middle; }
-    .brand-logo { width:122px; height:auto; display:block; }
+    .brand-logo { width:122px; height:56px; object-fit:contain; display:block; }
     .page-label { text-align:left; color:#60769c; font-size:9pt; }
     h1 { margin:3px 0 2px; text-align:center; color:#0c43a5; font-size:22pt; }
     .subtitle { text-align:center; font-weight:bold; font-size:10.5pt; margin-bottom:7px; }
@@ -148,7 +148,7 @@ def render_contract_pdf_otp(data: contract_pdf.ContractData, *, converter=contra
         source_path = root / "merchant-agreement.html"
         source_path.write_text(build_contract_html_otp(data), encoding="utf-8")
 
-        # LibreOffice renders a normal local JPEG much more reliably than a large data URI.
+        # LibreOffice renders a normal local JPEG more reliably than a large data URI.
         uri = contract_pdf._logo_data_uri()
         try:
             logo_payload = base64.b64decode(uri.split(",", 1)[1])
