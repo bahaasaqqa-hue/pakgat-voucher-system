@@ -17,6 +17,7 @@ from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
 from app import merchant_manual_contract as manual
 from app import merchant_contract_otp as otp
+from app import merchant_contract_otp_compat  # noqa: F401 - stable fingerprint + safe audit lookup
 
 
 class MerchantContractOtpTests(unittest.TestCase):
