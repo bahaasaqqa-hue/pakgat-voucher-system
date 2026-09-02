@@ -1,4 +1,5 @@
 """Contract redesign regression tests."""
+from app import merchant_contract_pdf_otp_patch  # noqa: F401 - activate OTP contract copy
 from app.merchant_contract_pdf import ContractData, build_contract_html
 
 
@@ -14,12 +15,14 @@ def _sample():
     )
 
 
-def test_contract_is_branded_manual_signing_and_three_pages():
+def test_contract_is_branded_otp_signing_and_three_pages():
     html = build_contract_html(_sample())
     assert "بكجات" in html
     assert "data:image/jpeg;base64" in html
     assert html.count('class="page"') == 3
-    assert "يوقع ويختم" in html
+    assert "OTP" in html
+    assert "الموافقة الإلكترونية" in html
     assert "الموافقة النهائية" in html
+    assert "توقيعها وختمها" not in html
     assert "صادق" not in html
     assert "نفاذ" not in html
