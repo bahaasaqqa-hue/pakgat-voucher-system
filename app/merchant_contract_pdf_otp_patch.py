@@ -14,27 +14,47 @@ def _ltr(value: str) -> str:
 
 def _row(label: str, value: str, *, ltr: bool = False) -> str:
     rendered = _ltr(value) if ltr else contract_pdf._e(value)
-    return f'<tr><th>{contract_pdf._e(label)}</th><td>{rendered}</td></tr>'
+    return (
+        '<tr>'
+        f'<th width="34%">{contract_pdf._e(label)}</th>'
+        f'<td width="66%">{rendered}</td>'
+        '</tr>'
+    )
+
+
+def _blank_row() -> str:
+    return '<tr class="blank-row"><th>&nbsp;</th><td>&nbsp;</td></tr>'
 
 
 def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
-    heading = f'<div class="terms-title">{contract_pdf._e(page_title)}</div>' if page_title else ""
+    heading = (
+        f'<table class="terms-title" width="100%"><tr><td>{contract_pdf._e(page_title)}</td></tr></table>'
+        if page_title else ""
+    )
     return (
-        '<div class="clause">'
+        '<table class="clause" width="100%"><tr><td>'
         f'{heading}'
-        f'<h3>{number}. {contract_pdf._e(title)}</h3>'
-        f'<p>{contract_pdf._e(body)}</p>'
-        '</div>'
+        f'<p class="clause-title"><b>{number}. {contract_pdf._e(title)}</b></p>'
+        f'<p class="clause-body">{contract_pdf._e(body)}</p>'
+        '</td></tr></table>'
     )
 
 
 def _brand_header() -> str:
-    # dir=ltr is intentional: LibreOffice otherwise reverses table cells in RTL documents.
-    return '''<table class="brand" dir="ltr"><tr>
-      <td class="brand-spacer">&nbsp;</td>
-      <td class="brand-logo-cell"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat"></td>
-      <td class="brand-title"><div dir="rtl">اتفاقية شراكة تجارية</div></td>
-    </tr></table><div class="brand-rule"></div>'''
+    return '''<table class="brand" dir="ltr" width="100%"><tr>
+      <td width="33%" class="brand-spacer" align="left">&nbsp;</td>
+      <td width="33%" class="brand-logo-cell" align="center"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat" width="112"></td>
+      <td width="33%" class="brand-title" align="right"><span dir="rtl">اتفاقية شراكة تجارية</span></td>
+    </tr></table>
+    <table class="brand-rule" width="100%"><tr><td>&nbsp;</td></tr></table>'''
+
+
+def _footer(agreement: str, page_number: int) -> str:
+    return f'''<table class="footer" dir="ltr" width="100%"><tr>
+      <td width="33%" align="left">بكجات | Pakgat.com</td>
+      <td width="34%" align="center">{agreement}</td>
+      <td width="33%" align="right"><span dir="rtl">صفحة {page_number} من 3</span></td>
+    </tr></table>'''
 
 
 def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
@@ -47,8 +67,10 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
         _row("IBAN", data.iban, ltr=True),
         _row("رقم الجوال", data.contact_phone, ltr=True),
         _row("البريد الإلكتروني", data.contact_email, ltr=True),
+        _row("الموقع الإلكتروني", data.website or "لا يوجد", ltr=True),
+        _row("العنوان", data.national_address),
         _row("اسم الممثل", data.representative_name),
-        _row("صفته", data.representative_title),
+        _row("صفة الممثل", data.representative_title),
     ])
     pakgat_rows = "".join([
         _row("الاسم", "شركة تام العاصمة التجارية (Pakgat)"),
@@ -57,6 +79,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
         _row("الموقع الإلكتروني", "https://pakgat.com", ltr=True),
         _row("IBAN", "SA1710000026700000717001", ltr=True),
         _row("العنوان", "المملكة العربية السعودية"),
+        _blank_row(), _blank_row(), _blank_row(), _blank_row(), _blank_row(), _blank_row(),
     ])
 
     clauses_1 = "".join([
@@ -81,109 +104,135 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     css = """
     @page { size:A4; margin:8mm 10mm 8mm; }
     html, body { margin:0; padding:0; }
-    body { font-family:Arial,'Noto Sans Arabic',sans-serif; color:#172b4d; direction:rtl; background:#fff; font-size:8.5pt; text-align:right; }
+    body { font-family:Arial,'Noto Sans Arabic',sans-serif; color:#172b4d; direction:rtl; background:#fff; font-size:8pt; text-align:right; }
+    table { border-collapse:collapse; }
     .page { width:100%; }
-    .page-force { page-break-after:always; break-after:page; }
-    .page-last { page-break-after:auto; }
+    .page-break { page-break-before:always; height:1px; line-height:1px; font-size:1px; margin:0; padding:0; }
 
-    .brand { width:100%; table-layout:fixed; border-collapse:collapse; margin:0 0 4px; }
-    .brand td { padding:0 0 4px; vertical-align:middle; border:0; }
-    .brand-spacer { width:33.33%; }
-    .brand-logo-cell { width:33.33%; text-align:center; }
-    .brand-title { width:33.33%; text-align:right; color:#123d80; font-size:15pt; font-weight:bold; }
-    .brand-logo { width:105px; height:48px; object-fit:contain; display:inline-block; margin:0 auto; }
-    .brand-rule { border-bottom:2px solid #123d80; height:1px; margin:0 0 7px; }
+    .brand { table-layout:fixed; margin:0 0 2px; }
+    .brand td { border:0; padding:0 0 3px; vertical-align:middle; }
+    .brand-title { color:#123d80; font-size:15pt; font-weight:bold; white-space:nowrap; }
+    .brand-logo-cell { text-align:center; }
+    .brand-logo { width:112px; height:auto; }
+    .brand-rule td { border-bottom:2px solid #123d80; height:1px; padding:0; }
 
-    .subtitle { text-align:center; color:#172b4d; font-size:8.8pt; margin:0 0 8px; }
-    .meta { width:64%; table-layout:fixed; border-collapse:collapse; margin:0 auto 7px; }
-    .meta td { width:50%; border:1px solid #cdd9ea; background:#f7f9fc; padding:5px 8px; text-align:center; }
+    .subtitle { margin:6px 0 7px; text-align:center; font-size:8.4pt; line-height:1.3; }
+    .meta { width:64%; margin:0 auto 6px; table-layout:fixed; }
+    .meta td { border:1px solid #cdd9ea; background:#f7f9fc; padding:4px 7px; text-align:center; }
     .meta b { color:#123d80; }
 
-    .section-title { width:100%; table-layout:fixed; border-collapse:collapse; margin:6px 0 5px; }
-    .section-title td { color:#123d80; border-bottom:1px solid #c6d3e6; padding:4px 0; font-weight:bold; font-size:10.5pt; text-align:center; }
+    .section-title { margin:6px 0 5px; table-layout:fixed; }
+    .section-title td { color:#123d80; border-bottom:1px solid #c6d3e6; padding:4px 0; font-weight:bold; font-size:10.4pt; text-align:center; }
 
-    .party-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:7px 0; margin:0 -7px 6px; }
-    .party-grid > tbody > tr > td { width:50%; vertical-align:top; padding:0; }
-    .party-card { direction:rtl; border:1px solid #cbd7e7; background:#fff; }
-    .party-card-title { font-size:10pt; font-weight:bold; background:#123d80; color:#fff; padding:5px 7px; text-align:center; }
-    table.data { width:100%; table-layout:fixed; border-collapse:collapse; font-size:7.8pt; }
-    table.data th, table.data td { border-bottom:1px solid #e1e7ef; padding:3px 5px; vertical-align:middle; text-align:right; }
-    table.data tr:last-child th, table.data tr:last-child td { border-bottom:0; }
-    table.data th { width:34%; background:#f7f9fc; color:#254a80; font-weight:bold; }
-    table.data td { width:66%; color:#172b4d; }
+    .party-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin:0 0 6px; }
+    .party-grid > tbody > tr > td { vertical-align:top; padding:0 3px; }
+    .party-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; }
+    .party-card-title { background:#123d80; color:#fff; font-size:10pt; font-weight:bold; padding:5px 6px; text-align:center; }
+    .data { width:100%; table-layout:fixed; font-size:7.45pt; }
+    .data th, .data td { border-bottom:1px solid #e1e7ef; padding:3px 5px; vertical-align:middle; text-align:right; }
+    .data th { background:#f7f9fc; color:#254a80; font-weight:bold; }
+    .blank-row th, .blank-row td { color:#fff; background:#fff; }
+    .blank-row th { border-bottom:1px solid #e1e7ef; }
 
-    .intro { padding:4px 7px 6px; line-height:1.5; margin-bottom:5px; text-align:right; }
-    .manual-note { padding:6px 9px; line-height:1.45; margin-bottom:5px; text-align:center; background:#fff; border:1px solid #cdd9ea; }
-    .manual-note-title { color:#123d80; font-weight:bold; text-align:center; margin-bottom:3px; }
-    .manual-note-rule { border-top:1px solid #d9e2ee; margin:4px 0; }
+    .intro-table { width:100%; table-layout:fixed; margin-bottom:5px; }
+    .intro-table td { padding:4px 7px 6px; line-height:1.45; text-align:right; }
+    .signing-box { width:100%; table-layout:fixed; border:1px solid #cdd9ea; margin-bottom:5px; }
+    .signing-box td { padding:6px 9px; text-align:center; line-height:1.4; }
+    .signing-title { color:#123d80; font-weight:bold; font-size:9pt; }
+    .signing-separator { border-top:1px solid #d9e2ee; height:1px; padding:0 !important; }
 
-    .clause { padding:4px 0 5px; page-break-inside:avoid; text-align:right; }
-    .clause h3 { color:#123d80; margin:0 0 2px; font-size:10.2pt; }
-    .clause p { margin:0; color:#263b61; font-size:8.05pt; line-height:1.42; text-align:right; }
-    .terms-title { color:#123d80; border-bottom:2px solid #123d80; padding:3px 0 5px; margin-bottom:6px; font-weight:bold; font-size:10.5pt; text-align:center; }
+    .terms-title { width:100%; table-layout:fixed; margin:0 0 5px; }
+    .terms-title td { color:#123d80; border-bottom:2px solid #123d80; padding:3px 0 5px; font-weight:bold; font-size:10.5pt; text-align:center; }
+    .clause { table-layout:fixed; page-break-inside:avoid; margin:0 0 3px; }
+    .clause > tbody > tr > td { padding:3px 0 4px; border-bottom:1px solid #e2e8f0; }
+    .clause-title { color:#123d80; font-size:10pt; margin:0 0 2px; text-align:right; }
+    .clause-body { color:#263b61; font-size:7.9pt; line-height:1.38; margin:0; text-align:right; }
 
-    .approval-table { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:7px 0; margin:5px -7px 0; }
-    .approval-table td { width:50%; border:1px solid #cbd7e7; padding:0 7px 6px; vertical-align:top; text-align:right; direction:rtl; }
-    .approval-table h3 { margin:0 -7px 5px; padding:5px 7px; color:#fff; background:#123d80; font-size:9.5pt; text-align:center; }
-    .approval-line { margin:2px 0; font-size:7.8pt; line-height:1.35; }
-    .activation { margin-top:6px; padding:7px 9px; background:#f7f9fc; border:1px solid #cdd9ea; color:#123d80; font-weight:bold; font-size:8.4pt; text-align:center; }
+    .approval-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin-top:5px; }
+    .approval-grid > tbody > tr > td { vertical-align:top; padding:0 3px; }
+    .approval-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; }
+    .approval-card-title { background:#123d80; color:#fff; font-size:9.5pt; font-weight:bold; padding:5px 6px; text-align:center; }
+    .approval-card td { padding:3px 6px; text-align:right; font-size:7.7pt; line-height:1.32; }
+    .activation-box { width:100%; table-layout:fixed; border:1px solid #cdd9ea; margin-top:6px; }
+    .activation-box td { padding:7px 9px; background:#f7f9fc; color:#123d80; font-weight:bold; font-size:8.2pt; text-align:center; line-height:1.35; }
 
-    .footer { width:100%; table-layout:fixed; border-collapse:collapse; margin-top:7px; border-top:2px solid #123d80; color:#526783; font-size:7.4pt; direction:ltr; }
-    .footer td { width:33.33%; padding-top:4px; }
-    .footer .site { text-align:left; }
-    .footer .center { text-align:center; }
-    .page-number { text-align:right; direction:rtl; }
+    .footer { width:100%; table-layout:fixed; margin-top:7px; border-top:2px solid #123d80; color:#526783; font-size:7.2pt; }
+    .footer td { padding-top:4px; white-space:nowrap; }
     .ltr { direction:ltr; unicode-bidi:embed; display:inline-block; }
     """
 
     agreement = _ltr(data.agreement_number)
     header = _brand_header()
+
+    party_grid = f'''<table class="party-grid" dir="ltr" width="100%"><tr>
+      <td width="50%" class="merchant-cell">
+        <table class="party-card" dir="rtl" width="100%">
+          <tr><td class="party-card-title">الطرف الثاني (التاجر)</td></tr>
+          <tr><td style="padding:0"><table class="data" dir="rtl" width="100%">{merchant_rows}</table></td></tr>
+        </table>
+      </td>
+      <td width="50%" class="pakgat-cell">
+        <table class="party-card" dir="rtl" width="100%">
+          <tr><td class="party-card-title">الطرف الأول</td></tr>
+          <tr><td style="padding:0"><table class="data" dir="rtl" width="100%">{pakgat_rows}</table></td></tr>
+        </table>
+      </td>
+    </tr></table>'''
+
+    approval_grid = f'''<table class="approval-grid" dir="ltr" width="100%"><tr>
+      <td width="50%">
+        <table class="approval-card" dir="rtl" width="100%">
+          <tr><td class="approval-card-title">الطرف الثاني (التاجر)</td></tr>
+          <tr><td>الاسم: {contract_pdf._e(data.representative_name)}</td></tr>
+          <tr><td>الصفة: {contract_pdf._e(data.representative_title)}</td></tr>
+          <tr><td>الجوال: {_ltr(data.contact_phone)}</td></tr>
+          <tr><td>الموافقة: إلكترونياً عبر رمز تحقق OTP</td></tr>
+          <tr><td>رقم الاتفاقية: {agreement}</td></tr>
+        </table>
+      </td>
+      <td width="50%">
+        <table class="approval-card" dir="rtl" width="100%">
+          <tr><td class="approval-card-title">الطرف الأول</td></tr>
+          <tr><td><b>شركة تام العاصمة التجارية (Pakgat)</b></td></tr>
+          <tr><td>الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</td></tr>
+          <tr><td>الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}</td></tr>
+          <tr><td>الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب</td></tr>
+          <tr><td>الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي</td></tr>
+        </table>
+      </td>
+    </tr></table>'''
+
     return f'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>{css}</style></head><body>
-<section class="page page-force" id="contract-page-1">
+<section class="page" id="contract-page-1">
   {header}
   <div class="subtitle">لترويج وبيع العروض والقسائم الإلكترونية بين شركة تام العاصمة التجارية (Pakgat) والتاجر.</div>
-  <table class="meta"><tr><td><b>التاريخ:</b> {_ltr(data.agreement_date)}</td><td><b>رقم الاتفاقية:</b> {agreement}</td></tr></table>
-
-  <table class="section-title"><tr><td>أولاً: أطراف الاتفاقية</td></tr></table>
-  <table class="party-grid" dir="ltr"><tr>
-    <td><div class="party-card"><div class="party-card-title">الطرف الثاني (التاجر)</div><table class="data">{merchant_rows}</table></div></td>
-    <td><div class="party-card"><div class="party-card-title">الطرف الأول</div><table class="data">{pakgat_rows}</table></div></td>
+  <table class="meta" width="64%"><tr>
+    <td width="50%"><b>التاريخ:</b> {_ltr(data.agreement_date)}</td>
+    <td width="50%"><b>رقم الاتفاقية:</b> {agreement}</td>
   </tr></table>
-
-  <table class="section-title"><tr><td>ثانياً: التمهيد</td></tr></table>
-  <div class="intro">حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.</div>
-  <div class="manual-note"><div class="manual-note-title">إجراء التوقيع والاعتماد</div>يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل.<div class="manual-note-rule"></div>نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية.<br><b>لا يتم تفعيل حساب التاجر تلقائياً.</b></div>
-  <table class="footer"><tr><td class="site">بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 1 من 3</td></tr></table>
+  <table class="section-title" width="100%"><tr><td>أولاً: أطراف الاتفاقية</td></tr></table>
+  {party_grid}
+  <table class="section-title" width="100%"><tr><td>ثانياً: التمهيد</td></tr></table>
+  <table class="intro-table"><tr><td>حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.</td></tr></table>
+  <table class="signing-box"><tr><td class="signing-title">إجراء التوقيع والاعتماد</td></tr><tr><td>يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل.</td></tr><tr><td class="signing-separator">&nbsp;</td></tr><tr><td>نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية.<br><b>لا يتم تفعيل حساب التاجر تلقائياً.</b></td></tr></table>
+  {_footer(agreement, 1)}
 </section>
 
-<section class="page page-force" id="contract-page-2">
+<div class="page-break">&nbsp;</div>
+<section class="page" id="contract-page-2">
   {header}
   {clauses_1}
-  <table class="footer"><tr><td class="site">بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 2 من 3</td></tr></table>
+  {_footer(agreement, 2)}
 </section>
 
-<section class="page page-last" id="contract-page-3">
+<div class="page-break">&nbsp;</div>
+<section class="page" id="contract-page-3">
   {header}
   {clauses_2}
-  <table class="section-title"><tr><td>رابعاً: الموافقة الإلكترونية والاعتماد النهائي</td></tr></table>
-  <table class="approval-table" dir="ltr"><tr>
-    <td><h3>الطرف الثاني (التاجر)</h3>
-      <div class="approval-line">الاسم: {contract_pdf._e(data.representative_name)}</div>
-      <div class="approval-line">الصفة: {contract_pdf._e(data.representative_title)}</div>
-      <div class="approval-line">الجوال: {_ltr(data.contact_phone)}</div>
-      <div class="approval-line">الموافقة: إلكترونياً عبر رمز تحقق OTP</div>
-      <div class="approval-line">رقم الاتفاقية: {agreement}</div>
-    </td>
-    <td><h3>الطرف الأول</h3>
-      <div class="approval-line"><b>شركة تام العاصمة التجارية (Pakgat)</b></div>
-      <div class="approval-line">الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</div>
-      <div class="approval-line">الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}</div>
-      <div class="approval-line">الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب</div>
-      <div class="approval-line">الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي</div>
-    </td>
-  </tr></table>
-  <div class="activation">نجاح OTP يثبت موافقة التاجر على الاتفاقية ولا يفعّل الحساب تلقائياً. يصبح الحساب Active فقط بعد الموافقة النهائية من Pakgat على طلب التسجيل.</div>
-  <table class="footer"><tr><td class="site">بكجات | Pakgat.com</td><td class="center">{agreement}</td><td class="page-number">صفحة 3 من 3</td></tr></table>
+  <table class="section-title" width="100%"><tr><td>رابعاً: الموافقة الإلكترونية والاعتماد النهائي</td></tr></table>
+  {approval_grid}
+  <table class="activation-box"><tr><td>نجاح OTP يثبت موافقة التاجر على الاتفاقية ولا يفعّل الحساب تلقائياً. يصبح الحساب Active فقط بعد الموافقة النهائية من Pakgat على طلب التسجيل.</td></tr></table>
+  {_footer(agreement, 3)}
 </section>
 </body></html>'''
 
