@@ -39,6 +39,22 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "نفاذ" not in html
 
 
+def test_contract_header_and_parties_match_approved_layout():
+    html = build_contract_html(_sample())
+    assert 'class="brand-title"' in html
+    assert 'class="brand-logo-cell"' in html
+    assert 'class="brand-spacer"' in html
+    assert '.brand-title { width:33.33%; text-align:right;' in html
+    assert '.brand-logo-cell { width:33.33%; text-align:center;' in html
+    assert '.brand-spacer { width:33.33%;' in html
+    assert 'class="party-grid"' in html
+    assert html.count('class="party-card"') == 2
+    assert html.count('class="party-card-title"') == 2
+    assert '.party-card-title { font-size:10pt; font-weight:bold;' in html
+    assert 'الطرف الأول' in html
+    assert 'الطرف الثاني (التاجر)' in html
+
+
 def test_contract_keeps_ltr_identifiers_stable_inside_rtl_document():
     html = build_contract_html(_sample())
     assert '<span class="ltr">PKG-MA-2026-09-0001</span>' in html
