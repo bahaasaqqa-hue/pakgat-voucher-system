@@ -18,7 +18,7 @@ def _sample():
 def test_contract_is_branded_otp_signing_and_three_pages():
     html = build_contract_html(_sample())
     assert "بكجات" in html
-    assert 'src="pakgat-logo.webp"' in html
+    assert 'src="pakgat-logo.jpg"' in html
     assert "object-fit:contain" in html
     assert html.count('class="page"') == 3
     assert html.count('class="brand-logo"') == 1
