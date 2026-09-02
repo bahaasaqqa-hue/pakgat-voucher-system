@@ -130,10 +130,10 @@ class MerchantOnboardingTests(unittest.TestCase):
         with patch.dict(os.environ, {"MERCHANT_DOCUMENT_ROOT": self.tmp.name}):
             onboarding.store_onboarding_document(self.db, merchant, filename="official.pdf", content_type="application/pdf", content=b"%PDF-1.4 test")
         application, contract = onboarding.submit_onboarding(self.db, merchant, declaration_accepted=True)
-        self.assertEqual(application.status, "ready_for_sadq")
+        self.assertEqual(application.status, "contract_ready")
         self.assertIsNotNone(application.declaration_accepted_at)
         self.assertIsNotNone(application.submitted_at)
-        self.assertEqual(contract.status, "ready_for_sadq")
+        self.assertEqual(contract.status, "contract_ready")
         self.assertIsNotNone(contract.agreement_number)
         self.db.refresh(merchant)
         self.assertEqual(merchant.status, "pending")
