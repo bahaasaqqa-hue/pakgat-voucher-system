@@ -1,8 +1,10 @@
 """Admin review actions for merchant onboarding.
 
-Pakgat does not create or approve a contract before the merchant signs through
-Sadq.  This module exposes the final review actions only after the Sadq-signed
-contract is back in Pakgat: approve, request completion, or reject.
+The merchant first signs/stamps the generated agreement and uploads it. Pakgat
+then reviews that copy, signs/stamps it, uploads the final joint PDF, and only
+then may explicitly approve/activate the merchant. Legacy Sadq states remain
+recognized for compatibility, but they are not part of the active onboarding
+journey.
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ def _document_list_html(db: Session, application_id: int) -> str:
 
 
 def merchant_contract_summary_html(db: Session, merchant_id: int) -> str:
-    """Render contract data plus onboarding review state without pre-Sadq approval controls."""
+    """Render onboarding review state and expose activation only after final PDF."""
     contract = _latest_contract(db, merchant_id)
     application = _application(db, merchant_id)
     base = _BASE_CONTRACT_SUMMARY(db, merchant_id)
@@ -75,12 +77,15 @@ def merchant_contract_summary_html(db: Session, merchant_id: int) -> str:
     status_label = {
         "profile": "جاري إدخال البيانات",
         "documents": "جاري استكمال المستندات",
-        "ready_for_sadq": "جاهز للإرسال إلى صادق",
-        "sadq_pending": "بانتظار توقيع صادق / نفاذ",
+        "contract_ready": "العقد جاهز للتوقيع والختم من التاجر",
+        "merchant_signed": "تم استلام عقد التاجر الموقّع والمختوم",
         "pending_review": "بانتظار مراجعة Pakgat",
         "changes_requested": "مطلوب استكمال",
         "approved": "معتمد",
         "rejected": "مرفوض",
+        # Legacy compatibility only.
+        "ready_for_sadq": "حالة توثيق قديمة",
+        "sadq_pending": "حالة توثيق قديمة قيد الانتظار",
     }.get(application.status, application.status)
     note_html = (
         f"<p><strong>ملاحظة المراجعة:</strong> {core.esc(application.review_note)}</p>"
@@ -197,6 +202,11 @@ async def admin_reject_onboarding(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return RedirectResponse(f"/admin/merchants/{merchant_id}", status_code=303)
+
+
+# Keep the enhanced review summary as the canonical contract summary even when
+# modules are imported directly outside main.py (for example tests/workers).
+contracts.merchant_contract_summary_html = merchant_contract_summary_html
 
 
 __all__ = [
