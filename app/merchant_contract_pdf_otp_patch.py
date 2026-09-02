@@ -1,15 +1,31 @@
-"""Adjust the branded merchant contract copy for OTP acceptance.
-
-This intentionally leaves the existing three-page visual renderer untouched and
-only changes signing/approval language.  Loaded after merchant_contract_otp.
-"""
+"""Adjust the branded merchant contract copy for OTP acceptance."""
 from __future__ import annotations
 
+import base64
 import re
 
 from app import merchant_contract_pdf as contract_pdf
 
 _original_build_contract_html = contract_pdf.build_contract_html
+
+
+def _logo_data_uri_tolerant() -> str:
+    path = contract_pdf._asset_dir() / "pakgat_contract_logo.b64"
+    if not path.is_file():
+        raise contract_pdf.ContractRenderError("Pakgat contract logo is missing")
+    try:
+        encoded = "".join(path.read_text(encoding="ascii").split())
+        payload = base64.b64decode(encoded, validate=False)
+    except Exception:
+        raise contract_pdf.ContractRenderError("Pakgat contract logo is invalid") from None
+    if not payload.startswith(b"\xff\xd8\xff"):
+        raise contract_pdf.ContractRenderError("Pakgat contract logo is invalid")
+    return "data:image/jpeg;base64," + base64.b64encode(payload).decode("ascii")
+
+
+# Repository text assets can be line-wrapped by transport. Decode whitespace-tolerantly,
+# then still enforce the JPEG magic bytes before embedding the official Pakgat logo.
+contract_pdf._logo_data_uri = _logo_data_uri_tolerant
 
 
 def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
