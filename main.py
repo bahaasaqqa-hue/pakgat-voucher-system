@@ -56,7 +56,9 @@ from app import merchant_onboarding_ui as _merchant_onboarding_ui  # noqa: F401 
 from app import merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets  # noqa: F401 - official Pakgat onboarding brand assets
 from app import merchant_finance_hooks as _merchant_finance_hooks  # noqa: F401 - refund/cancel, payable and API-security policy hooks
 from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 - merchant legal, VAT, contact and bank profile editing
-from app import merchant_manual_contract as _merchant_manual_contract  # noqa: F401 - manual PDF signing/stamping flow; Sadq/Nafath bypassed
+from app import merchant_manual_contract as _merchant_manual_contract  # noqa: F401 - optional manual PDF fallback; Sadq/Nafath bypassed
+from app import merchant_contract_otp as _merchant_contract_otp  # noqa: F401 - primary merchant agreement acceptance via dedicated OTP
+_merchant_contract_otp.ensure_contract_otp_schema()
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
 from app import voucher_lifecycle_dashboard as _voucher_lifecycle_dashboard  # noqa: F401 - automatic expiry sweep + refund/expired value dashboard
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
