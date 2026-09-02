@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.merchant_onboarding_ui import LOGO as PAKGAT_LOGO_DATA_URI
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 PAKGAT_SIGNER_NAME = "بهاء السقا"
@@ -191,4 +193,7 @@ __all__ = [
     "ContractRenderError",
     "build_contract_docx",
     "render_contract_pdf",
-]
+]def _logo_data_uri() -> str:
+    """Return the existing official transparent Pakgat logo."""
+    return PAKGAT_LOGO_DATA_URI
+
