@@ -1,8 +1,8 @@
 """Production-safe Pakgat contract logo loader.
 
-The stored asset may arrive as normal Base64 or accidentally double-Base64
-encoded through text transport. Normalize whitespace, decode once, and only
-perform a second decode when the first result is still ASCII Base64 text.
+Normalize transport whitespace and repair missing Base64 padding before decode.
+Supports both a normal JPEG Base64 payload and an accidentally double-Base64
+encoded payload while retaining a strict JPEG signature check.
 """
 from __future__ import annotations
 
@@ -12,20 +12,27 @@ import binascii
 from app import merchant_contract_pdf as contract_pdf
 
 
+def _decode_b64(value: str | bytes) -> bytes:
+    if isinstance(value, bytes):
+        compact = b"".join(value.split())
+        compact += b"=" * (-len(compact) % 4)
+        return base64.b64decode(compact, validate=True)
+    compact = "".join(str(value or "").split())
+    compact += "=" * (-len(compact) % 4)
+    return base64.b64decode(compact, validate=True)
+
+
 def _decode_logo_payload(encoded_text: str) -> bytes:
-    encoded = "".join(str(encoded_text or "").split())
     try:
-        payload = base64.b64decode(encoded, validate=True)
+        payload = _decode_b64(encoded_text)
     except (binascii.Error, ValueError):
         raise contract_pdf.ContractRenderError("Pakgat contract logo is invalid") from None
 
     if payload.startswith(b"\xff\xd8\xff"):
         return payload
 
-    # Some text transports encoded the Base64 string itself a second time.
     try:
-        inner = b"".join(payload.split())
-        decoded_again = base64.b64decode(inner, validate=True)
+        decoded_again = _decode_b64(payload)
     except (binascii.Error, ValueError):
         decoded_again = b""
 
