@@ -1,5 +1,10 @@
 """Contract redesign regression tests."""
+from __future__ import annotations
+
+import base64
+
 from app import merchant_contract_pdf_otp_patch  # noqa: F401 - activate OTP contract copy
+from app import merchant_contract_pdf as contract_pdf
 from app.merchant_contract_pdf import ContractData, build_contract_html
 
 
@@ -30,6 +35,23 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "min-height:267mm" not in html
     assert "صادق" not in html
     assert "نفاذ" not in html
+
+
+def test_contract_uses_libreoffice_safe_compact_tables():
+    html = build_contract_html(_sample())
+    assert 'class="merchant-grid"' in html
+    assert html.count('class="clause-columns"') == 2
+    assert 'class="approval-table"' in html
+    assert 'page-break-inside:avoid' in html
+
+
+def test_contract_logo_asset_is_complete_jpeg():
+    path = contract_pdf._asset_dir() / "pakgat_contract_logo.b64"
+    encoded = "".join(path.read_text(encoding="ascii").split())
+    payload = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
+    assert payload.startswith(b"\xff\xd8\xff")
+    assert payload.endswith(b"\xff\xd9")
+    assert len(payload) > 15000
 
 
 def test_contract_keeps_ltr_identifiers_stable_inside_rtl_document():
