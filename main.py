@@ -59,6 +59,7 @@ from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 
 from app import merchant_manual_contract as _merchant_manual_contract  # noqa: F401 - optional manual PDF fallback; Sadq/Nafath bypassed
 from app import merchant_contract_otp as _merchant_contract_otp  # noqa: F401 - primary merchant agreement acceptance via dedicated OTP
 _merchant_contract_otp.ensure_contract_otp_schema()
+from app import merchant_contract_otp_compat as _merchant_contract_otp_compat  # noqa: F401 - safe audit access + stable agreement fingerprint
 from app import merchant_contract_pdf_otp_patch as _merchant_contract_pdf_otp_patch  # noqa: F401 - OTP wording in branded contract
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
 from app import voucher_lifecycle_dashboard as _voucher_lifecycle_dashboard  # noqa: F401 - automatic expiry sweep + refund/expired value dashboard
