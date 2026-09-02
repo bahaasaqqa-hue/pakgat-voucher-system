@@ -20,8 +20,14 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "بكجات" in html
     assert 'src="pakgat-logo.jpg"' in html
     assert "object-fit:contain" in html
-    assert html.count('class="page"') == 3
+    assert html.count('<section class="page') == 3
     assert html.count('class="brand-logo"') == 1
+    assert 'class="page-number">صفحة 1 من 3' in html
+    assert 'class="page-number">صفحة 2 من 3' in html
+    assert 'class="page-number">صفحة 3 من 3' in html
+    assert "text-align:right" in html
+    assert "table-layout:fixed" in html
+    assert "background:#f7f9fc" in html
     assert "OTP" in html
     assert "الموافقة الإلكترونية" in html
     assert "الموافقة النهائية" in html
