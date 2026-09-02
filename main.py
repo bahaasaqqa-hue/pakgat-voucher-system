@@ -44,19 +44,19 @@ from app import jood_company_ui as _jood_company_ui  # noqa: F401 - Jood operati
 from app import corporate_salla_ui as _corporate_salla_ui  # noqa: F401 - final Corporate wording/readiness UI
 from app import corporate_ai_bridge as _corporate_ai_bridge  # noqa: F401 - expose Corporate Benefits in AI Company
 from app import merchant_finance as _merchant_finance  # noqa: F401 - merchant profiles, product commissions and weekly settlements
-from app import merchant_contracts as _merchant_contracts  # noqa: F401 - Sadq merchant contract lifecycle and delivery audit
+from app import merchant_contracts as _merchant_contracts  # noqa: F401 - merchant contract lifecycle and delivery audit
 _merchant_contracts.ensure_merchant_contract_schema()
-from app import merchant_contract_admin_actions as _merchant_contract_admin_actions  # noqa: F401 - post-Sadq merchant review actions
+from app import merchant_contract_admin_actions as _merchant_contract_admin_actions  # noqa: F401 - merchant review actions
 _merchant_contracts.merchant_contract_summary_html = _merchant_contract_admin_actions.merchant_contract_summary_html
 from app import merchant_portal as _merchant_portal  # noqa: F401 - public merchant WhatsApp OTP portal
 _merchant_portal.ensure_merchant_portal_schema()
 from app import merchant_onboarding as _merchant_onboarding  # noqa: F401 - self-service merchant registration, documents and review lifecycle
 _merchant_onboarding.ensure_merchant_onboarding_schema()
 from app import merchant_onboarding_ui as _merchant_onboarding_ui  # noqa: F401 - friendly partner registration presentation
-from app import merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets  # noqa: F401 - official Pakgat logo and Nafath image
-from app import merchant_onboarding_sadq_bridge as _merchant_onboarding_sadq_bridge  # noqa: F401 - signed Sadq contracts become pending Pakgat review
+from app import merchant_onboarding_brand_assets as _merchant_onboarding_brand_assets  # noqa: F401 - official Pakgat onboarding brand assets
 from app import merchant_finance_hooks as _merchant_finance_hooks  # noqa: F401 - refund/cancel, payable and API-security policy hooks
 from app import merchant_profile_admin as _merchant_profile_admin  # noqa: F401 - merchant legal, VAT, contact and bank profile editing
+from app import merchant_manual_contract as _merchant_manual_contract  # noqa: F401 - manual PDF signing/stamping flow; Sadq/Nafath intentionally bypassed
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
 from app import voucher_lifecycle_dashboard as _voucher_lifecycle_dashboard  # noqa: F401 - automatic expiry sweep + refund/expired value dashboard
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
