@@ -16,14 +16,14 @@ def _row(label: str, value: str, *, ltr: bool = False) -> str:
     rendered = _ltr(value) if ltr else contract_pdf._e(value)
     return (
         '<tr>'
-        f'<th width="34%">{contract_pdf._e(label)}</th>'
-        f'<td width="66%">{rendered}</td>'
+        f'<th width="34%" bgcolor="#f7f9fc">{contract_pdf._e(label)}</th>'
+        f'<td width="66%" bgcolor="#ffffff">{rendered}</td>'
         '</tr>'
     )
 
 
 def _blank_row() -> str:
-    return '<tr class="blank-row"><th>&nbsp;</th><td>&nbsp;</td></tr>'
+    return '<tr class="blank-row"><th bgcolor="#f7f9fc">&nbsp;</th><td bgcolor="#ffffff">&nbsp;</td></tr>'
 
 
 def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
@@ -43,7 +43,7 @@ def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
 def _brand_header() -> str:
     return '''<table class="brand" dir="ltr" width="100%"><tr>
       <td width="33%" class="brand-spacer" align="left">&nbsp;</td>
-      <td width="33%" class="brand-logo-cell" align="center"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat" width="112"></td>
+      <td width="33%" class="brand-logo-cell" align="center"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat" width="88" height="42"></td>
       <td width="33%" class="brand-title" align="right"><span dir="rtl">اتفاقية شراكة تجارية</span></td>
     </tr></table>
     <table class="brand-rule" width="100%"><tr><td>&nbsp;</td></tr></table>'''
@@ -55,6 +55,20 @@ def _footer(agreement: str, page_number: int) -> str:
       <td width="34%" align="center">{agreement}</td>
       <td width="33%" align="right"><span dir="rtl">صفحة {page_number} من 3</span></td>
     </tr></table>'''
+
+
+def _prepare_logo_for_libreoffice(payload: bytes) -> bytes:
+    """Give the JPEG a sane intrinsic DPI so LibreOffice cannot expand it to page size."""
+    data = bytearray(payload)
+    marker = data.find(b"JFIF\x00")
+    if marker != -1 and marker + 12 <= len(data):
+        # JFIF: identifier(5), version(2), units(1), Xdensity(2), Ydensity(2).
+        units = marker + 7
+        density = (1000).to_bytes(2, "big")
+        data[units] = 1  # dots per inch
+        data[units + 1:units + 3] = density
+        data[units + 3:units + 5] = density
+    return bytes(data)
 
 
 def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
@@ -113,7 +127,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .brand td { border:0; padding:0 0 3px; vertical-align:middle; }
     .brand-title { color:#123d80; font-size:15pt; font-weight:bold; white-space:nowrap; }
     .brand-logo-cell { text-align:center; }
-    .brand-logo { width:112px; height:auto; }
+    .brand-logo { width:88px; height:42px; }
     .brand-rule td { border-bottom:2px solid #123d80; height:1px; padding:0; }
 
     .subtitle { margin:6px 0 7px; text-align:center; font-size:8.4pt; line-height:1.3; }
@@ -124,15 +138,16 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .section-title { margin:6px 0 5px; table-layout:fixed; }
     .section-title td { color:#123d80; border-bottom:1px solid #c6d3e6; padding:4px 0; font-weight:bold; font-size:10.4pt; text-align:center; }
 
-    .party-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin:0 0 6px; }
-    .party-grid > tbody > tr > td { vertical-align:top; padding:0 3px; }
-    .party-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; }
+    .party-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin:0 0 6px; background:#fff; }
+    .party-grid > tbody > tr > td { vertical-align:top; padding:0 3px; background:#fff; }
+    .party-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; background:#fff; }
     .party-card-title { background:#123d80; color:#fff; font-size:10pt; font-weight:bold; padding:5px 6px; text-align:center; }
-    .data { width:100%; table-layout:fixed; font-size:7.45pt; }
+    .data { width:100%; table-layout:fixed; font-size:7.45pt; background:#fff; }
     .data th, .data td { border-bottom:1px solid #e1e7ef; padding:3px 5px; vertical-align:middle; text-align:right; }
     .data th { background:#f7f9fc; color:#254a80; font-weight:bold; }
-    .blank-row th, .blank-row td { color:#fff; background:#fff; }
-    .blank-row th { border-bottom:1px solid #e1e7ef; }
+    .data td { background:#fff; color:#172b4d; }
+    .blank-row th { color:#f7f9fc; background:#f7f9fc; }
+    .blank-row td { color:#fff; background:#fff; }
 
     .intro-table { width:100%; table-layout:fixed; margin-bottom:5px; }
     .intro-table td { padding:4px 7px 6px; line-height:1.45; text-align:right; }
@@ -149,10 +164,11 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .clause-body { color:#263b61; font-size:7.9pt; line-height:1.38; margin:0; text-align:right; }
 
     .approval-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin-top:5px; }
-    .approval-grid > tbody > tr > td { vertical-align:top; padding:0 3px; }
-    .approval-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; }
+    .approval-grid > tbody > tr > td { vertical-align:top; padding:0 3px; background:#fff; }
+    .approval-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; background:#fff; }
     .approval-card-title { background:#123d80; color:#fff; font-size:9.5pt; font-weight:bold; padding:5px 6px; text-align:center; }
-    .approval-card td { padding:3px 6px; text-align:right; font-size:7.7pt; line-height:1.32; }
+    .approval-card td { padding:3px 6px; text-align:right; font-size:7.7pt; line-height:1.32; background:#fff; }
+    .approval-card .approval-card-title { background:#123d80; color:#fff; text-align:center; }
     .activation-box { width:100%; table-layout:fixed; border:1px solid #cdd9ea; margin-top:6px; }
     .activation-box td { padding:7px 9px; background:#f7f9fc; color:#123d80; font-weight:bold; font-size:8.2pt; text-align:center; line-height:1.35; }
 
@@ -164,40 +180,40 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     agreement = _ltr(data.agreement_number)
     header = _brand_header()
 
-    party_grid = f'''<table class="party-grid" dir="ltr" width="100%"><tr>
-      <td width="50%" class="merchant-cell">
-        <table class="party-card" dir="rtl" width="100%">
-          <tr><td class="party-card-title">الطرف الثاني (التاجر)</td></tr>
-          <tr><td style="padding:0"><table class="data" dir="rtl" width="100%">{merchant_rows}</table></td></tr>
+    party_grid = f'''<table class="party-grid" dir="ltr" width="100%" bgcolor="#ffffff"><tr>
+      <td width="50%" class="merchant-cell" bgcolor="#ffffff">
+        <table class="party-card" dir="rtl" width="100%" bgcolor="#ffffff">
+          <tr><td class="party-card-title" bgcolor="#123d80">الطرف الثاني (التاجر)</td></tr>
+          <tr><td style="padding:0" bgcolor="#ffffff"><table class="data" dir="rtl" width="100%" bgcolor="#ffffff">{merchant_rows}</table></td></tr>
         </table>
       </td>
-      <td width="50%" class="pakgat-cell">
-        <table class="party-card" dir="rtl" width="100%">
-          <tr><td class="party-card-title">الطرف الأول</td></tr>
-          <tr><td style="padding:0"><table class="data" dir="rtl" width="100%">{pakgat_rows}</table></td></tr>
+      <td width="50%" class="pakgat-cell" bgcolor="#ffffff">
+        <table class="party-card" dir="rtl" width="100%" bgcolor="#ffffff">
+          <tr><td class="party-card-title" bgcolor="#123d80">الطرف الأول</td></tr>
+          <tr><td style="padding:0" bgcolor="#ffffff"><table class="data" dir="rtl" width="100%" bgcolor="#ffffff">{pakgat_rows}</table></td></tr>
         </table>
       </td>
     </tr></table>'''
 
-    approval_grid = f'''<table class="approval-grid" dir="ltr" width="100%"><tr>
-      <td width="50%">
-        <table class="approval-card" dir="rtl" width="100%">
-          <tr><td class="approval-card-title">الطرف الثاني (التاجر)</td></tr>
-          <tr><td>الاسم: {contract_pdf._e(data.representative_name)}</td></tr>
-          <tr><td>الصفة: {contract_pdf._e(data.representative_title)}</td></tr>
-          <tr><td>الجوال: {_ltr(data.contact_phone)}</td></tr>
-          <tr><td>الموافقة: إلكترونياً عبر رمز تحقق OTP</td></tr>
-          <tr><td>رقم الاتفاقية: {agreement}</td></tr>
+    approval_grid = f'''<table class="approval-grid" dir="ltr" width="100%" bgcolor="#ffffff"><tr>
+      <td width="50%" bgcolor="#ffffff">
+        <table class="approval-card" dir="rtl" width="100%" bgcolor="#ffffff">
+          <tr><td class="approval-card-title" bgcolor="#123d80">الطرف الثاني (التاجر)</td></tr>
+          <tr><td bgcolor="#ffffff">الاسم: {contract_pdf._e(data.representative_name)}</td></tr>
+          <tr><td bgcolor="#ffffff">الصفة: {contract_pdf._e(data.representative_title)}</td></tr>
+          <tr><td bgcolor="#ffffff">الجوال: {_ltr(data.contact_phone)}</td></tr>
+          <tr><td bgcolor="#ffffff">الموافقة: إلكترونياً عبر رمز تحقق OTP</td></tr>
+          <tr><td bgcolor="#ffffff">رقم الاتفاقية: {agreement}</td></tr>
         </table>
       </td>
-      <td width="50%">
-        <table class="approval-card" dir="rtl" width="100%">
-          <tr><td class="approval-card-title">الطرف الأول</td></tr>
-          <tr><td><b>شركة تام العاصمة التجارية (Pakgat)</b></td></tr>
-          <tr><td>الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</td></tr>
-          <tr><td>الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}</td></tr>
-          <tr><td>الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب</td></tr>
-          <tr><td>الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي</td></tr>
+      <td width="50%" bgcolor="#ffffff">
+        <table class="approval-card" dir="rtl" width="100%" bgcolor="#ffffff">
+          <tr><td class="approval-card-title" bgcolor="#123d80">الطرف الأول</td></tr>
+          <tr><td bgcolor="#ffffff"><b>شركة تام العاصمة التجارية (Pakgat)</b></td></tr>
+          <tr><td bgcolor="#ffffff">الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</td></tr>
+          <tr><td bgcolor="#ffffff">الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}</td></tr>
+          <tr><td bgcolor="#ffffff">الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب</td></tr>
+          <tr><td bgcolor="#ffffff">الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي</td></tr>
         </table>
       </td>
     </tr></table>'''
@@ -248,6 +264,7 @@ def render_contract_pdf_otp(data: contract_pdf.ContractData, *, converter=contra
             logo_payload = base64.b64decode(uri.split(",", 1)[1])
         except Exception:
             raise contract_pdf.ContractRenderError("Pakgat contract logo is invalid") from None
+        logo_payload = _prepare_logo_for_libreoffice(logo_payload)
         (root / "pakgat-logo.jpg").write_bytes(logo_payload)
 
         converter(source_path, root)
