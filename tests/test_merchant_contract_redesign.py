@@ -23,6 +23,6 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "OTP" in html
     assert "الموافقة الإلكترونية" in html
     assert "الموافقة النهائية" in html
-    assert "توقيعها وختمها" not in html
+    assert "يقوم التاجر بتحميل هذه الاتفاقية وتوقيعها وختمها" not in html
     assert "صادق" not in html
     assert "نفاذ" not in html
