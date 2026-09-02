@@ -3,6 +3,9 @@
 The existing Sadq webhook owns contract state. This additive SQLAlchemy hook
 observes only a transition to ``signed`` and moves the corresponding onboarding
 application to Pakgat review. It never activates a merchant.
+
+This legacy bridge is preserved for compatibility but is not loaded by the
+active manual onboarding path.
 """
 
 from __future__ import annotations
@@ -24,10 +27,14 @@ def _is_signed_transition(contract: finance.MerchantContract, session: Session) 
 
 
 def _onboarding_schema_available(session: Session) -> bool:
-    """Return whether this Session's database has the onboarding application table."""
+    """Check schema using this Session's connection without opening a side transaction."""
     try:
-        bind = session.get_bind()
-        return bool(sa_inspect(bind).has_table(onboarding.MerchantOnboardingApplication.__tablename__))
+        connection = session.connection()
+        return bool(
+            sa_inspect(connection).has_table(
+                onboarding.MerchantOnboardingApplication.__tablename__
+            )
+        )
     except Exception:
         return False
 
