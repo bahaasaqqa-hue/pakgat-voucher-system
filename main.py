@@ -61,6 +61,7 @@ from app import merchant_contract_otp as _merchant_contract_otp  # noqa: F401 - 
 _merchant_contract_otp.ensure_contract_otp_schema()
 from app import merchant_contract_otp_compat as _merchant_contract_otp_compat  # noqa: F401 - safe audit access + stable agreement fingerprint
 from app import merchant_contract_pdf_otp_patch as _merchant_contract_pdf_otp_patch  # noqa: F401 - OTP wording in branded contract
+from app import merchant_contract_logo_hotfix as _merchant_contract_logo_hotfix  # noqa: F401 - tolerate wrapped base64 logo asset
 from app import merchant_voucher_page as _merchant_voucher_page  # noqa: F401 - merchant hours/contact/address on the existing voucher page
 from app import voucher_lifecycle_dashboard as _voucher_lifecycle_dashboard  # noqa: F401 - automatic expiry sweep + refund/expired value dashboard
 from app import admin_ai_typography as _admin_ai_typography  # noqa: F401 - scoped Pakgat AI typography normalization
