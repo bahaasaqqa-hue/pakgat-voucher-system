@@ -21,7 +21,7 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert 'src="pakgat-logo.jpg"' in html
     assert "object-fit:contain" in html
     assert html.count('<section class="page') == 3
-    assert html.count('class="brand-logo"') == 1
+    assert html.count('class="brand-logo"') == 3
     assert 'class="page-number">صفحة 1 من 3' in html
     assert 'class="page-number">صفحة 2 من 3' in html
     assert 'class="page-number">صفحة 3 من 3' in html
@@ -39,20 +39,25 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "نفاذ" not in html
 
 
-def test_contract_header_and_parties_match_approved_layout():
+def test_contract_matches_approved_reference_layout():
     html = build_contract_html(_sample())
-    assert 'class="brand-title"' in html
-    assert 'class="brand-logo-cell"' in html
-    assert 'class="brand-spacer"' in html
-    assert '.brand-title { width:33.33%; text-align:right;' in html
-    assert '.brand-logo-cell { width:33.33%; text-align:center;' in html
-    assert '.brand-spacer { width:33.33%;' in html
-    assert 'class="party-grid"' in html
+    assert html.count('class="brand" dir="ltr"') == 3
+    assert html.count('class="brand-title"') == 3
+    assert html.count('class="brand-logo-cell"') == 3
+    assert 'class="party-grid" dir="ltr"' in html
     assert html.count('class="party-card"') == 2
     assert html.count('class="party-card-title"') == 2
-    assert '.party-card-title { font-size:10pt; font-weight:bold;' in html
-    assert 'الطرف الأول' in html
-    assert 'الطرف الثاني (التاجر)' in html
+    assert 'class="approval-table" dir="ltr"' in html
+    assert '.page-force { page-break-after:always;' in html
+    assert '<section class="page page-force" id="contract-page-2">' in html
+    assert '<section class="page page-last" id="contract-page-3">' in html
+    page2 = html.split('id="contract-page-2">', 1)[1].split('id="contract-page-3">', 1)[0]
+    page3 = html.split('id="contract-page-3">', 1)[1]
+    assert "7. السرية وحماية البيانات" in page2
+    assert "8. حدود الصلاحيات والتعديلات" not in page2
+    assert "8. حدود الصلاحيات والتعديلات" in page3
+    assert "13. أحكام عامة" in page3
+    assert "رابعاً: الموافقة الإلكترونية والاعتماد النهائي" in page3
 
 
 def test_contract_keeps_ltr_identifiers_stable_inside_rtl_document():
