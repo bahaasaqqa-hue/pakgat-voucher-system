@@ -24,6 +24,7 @@ from app import application as core
 from app import merchant_finance as finance
 from app import merchant_onboarding as onboarding
 from app import merchant_manual_contract as manual
+from app import merchant_contract_pdf as contract_pdf
 
 
 class ManualMerchantContractFlowTests(unittest.TestCase):
@@ -86,6 +87,16 @@ class ManualMerchantContractFlowTests(unittest.TestCase):
         self.assertEqual(application.status, "contract_ready")
         self.assertEqual(contract.status, "contract_ready")
         self.assertEqual(self.merchant.status, "pending")
+
+    def test_contract_html_uses_transparent_official_logo(self):
+        _, contract = onboarding.submit_onboarding(
+            self.db, self.merchant, declaration_accepted=True
+        )
+        data = manual.contract_data_for(self.merchant, self.application, contract)
+        rendered = contract_pdf.build_contract_html(data)
+        self.assertIn("data:image/webp;base64,", rendered)
+        self.assertNotIn("data:image/jpeg;base64,", rendered)
+        self.assertIn("object-fit:contain", rendered)
 
     def test_contract_data_comes_from_saved_merchant_profile(self):
         _, contract = onboarding.submit_onboarding(
