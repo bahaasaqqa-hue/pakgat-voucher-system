@@ -20,9 +20,20 @@ def test_contract_is_branded_otp_signing_and_three_pages():
     assert "بكجات" in html
     assert "data:image/jpeg;base64" in html
     assert html.count('class="page"') == 3
+    assert html.count('class="brand-logo"') == 1
     assert "OTP" in html
     assert "الموافقة الإلكترونية" in html
     assert "الموافقة النهائية" in html
     assert "يقوم التاجر بتحميل هذه الاتفاقية وتوقيعها وختمها" not in html
+    assert "display:grid" not in html
+    assert "display:flex" not in html
+    assert "min-height:267mm" not in html
     assert "صادق" not in html
     assert "نفاذ" not in html
+
+
+def test_contract_keeps_ltr_identifiers_stable_inside_rtl_document():
+    html = build_contract_html(_sample())
+    assert '<span class="ltr">PKG-MA-2026-09-0001</span>' in html
+    assert '<span class="ltr">SA0000000000000000000000</span>' in html
+    assert '<span class="ltr">0500000000</span>' in html
