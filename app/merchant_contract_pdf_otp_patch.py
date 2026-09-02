@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from app import merchant_contract_pdf as contract_pdf
-from app.merchant_onboarding_ui import LOGO as PAKGAT_LOGO_DATA_URI
+from app.merchant_brand_logo import PAKGAT_LOGO_DATA_URI
 
 
 def _ltr(value: str) -> str:
