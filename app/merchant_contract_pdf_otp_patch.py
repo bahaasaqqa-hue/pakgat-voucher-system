@@ -87,7 +87,7 @@ def _cell_text(cell, text, size, *, bold=False, color=TEXT, align=WD_ALIGN_PARAG
         _rtl(p, align)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.0
+    p.paragraph_format.line_spacing = 1.05
     _run(p, text, size, bold=bold, color=color, rtl=rtl)
 
 
@@ -116,7 +116,7 @@ def _border(cell, color=BORDER, size=4, *, top=True, bottom=True, left=True, rig
         borders.append(el)
 
 
-def _margins(cell, top=40, start=55, bottom=40, end=55):
+def _margins(cell, top=55, start=70, bottom=55, end=70):
     tcpr = cell._tc.get_or_add_tcPr()
     mar = tcpr.first_child_found_in("w:tcMar") or OxmlElement("w:tcMar")
     if mar.getparent() is None:
@@ -135,11 +135,20 @@ def _fixed(table):
     table.autofit = False
 
 
+def _row_geometry(row, height_twips):
+    trpr = row._tr.get_or_add_trPr()
+    height = OxmlElement("w:trHeight")
+    height.set(qn("w:val"), str(height_twips))
+    height.set(qn("w:hRule"), "atLeast")
+    trpr.append(height)
+    trpr.append(OxmlElement("w:cantSplit"))
+
+
 def _section(section):
     section.page_width = Mm(210)
     section.page_height = Mm(297)
-    section.top_margin = Mm(6)
-    section.bottom_margin = Mm(6)
+    section.top_margin = Mm(7)
+    section.bottom_margin = Mm(8)
     section.left_margin = Mm(8)
     section.right_margin = Mm(8)
     section.footer_distance = Mm(3)
@@ -149,13 +158,14 @@ def _header(doc, logo_path: Path, compact=False):
     t = doc.add_table(rows=1, cols=3)
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
     _fixed(t)
+    _row_geometry(t.rows[0], 430 if compact else 500)
     for cell, width in zip(t.rows[0].cells, (64, 66, 64)):
         cell.width = Mm(width)
         _margins(cell, 0, 0, 0, 0)
     p = t.cell(0, 1).paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.add_run().add_picture(str(logo_path), width=Mm(22 if compact else 25))
-    _cell_text(t.cell(0, 2), "اتفاقية شراكة تجارية", 9.5 if compact else 12, bold=True, color=NAVY)
+    p.add_run().add_picture(str(logo_path), width=Mm(24 if compact else 27))
+    _cell_text(t.cell(0, 2), "اتفاقية شراكة تجارية", 10.3 if compact else 12.5, bold=True, color=NAVY)
     rule = doc.add_table(rows=1, cols=1)
     rule.alignment = WD_TABLE_ALIGNMENT.CENTER
     c = rule.cell(0, 0)
@@ -172,15 +182,16 @@ def _footer(section, page, agreement):
     for c, width in zip(t.rows[0].cells, (64, 66, 64)):
         c.width = Mm(width)
         _border(c, NAVY, 6, bottom=False, left=False, right=False)
-        _margins(c, 25, 0, 0, 0)
-    _cell_text(t.cell(0, 0), "بكجات | Pakgat.com", 6, color=MUTED, align=WD_ALIGN_PARAGRAPH.LEFT, rtl=False)
-    _cell_text(t.cell(0, 1), agreement, 6, color=MUTED, align=WD_ALIGN_PARAGRAPH.CENTER, rtl=False)
-    _cell_text(t.cell(0, 2), f"صفحة {page} من 3", 6, color=MUTED)
+        _margins(c, 35, 0, 0, 0)
+    _cell_text(t.cell(0, 0), "بكجات | Pakgat.com", 6.4, color=MUTED, align=WD_ALIGN_PARAGRAPH.LEFT, rtl=False)
+    _cell_text(t.cell(0, 1), agreement, 6.4, color=MUTED, align=WD_ALIGN_PARAGRAPH.CENTER, rtl=False)
+    _cell_text(t.cell(0, 2), f"صفحة {page} من 3", 6.4, color=MUTED)
 
 
-def _title(doc, text, size=7.8):
+def _title(doc, text, size=8.5):
     t = doc.add_table(rows=1, cols=1)
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _row_geometry(t.rows[0], 280)
     c = t.cell(0, 0)
     _cell_text(c, text, size, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
     _border(c, BORDER, 4, top=False, left=False, right=False)
@@ -191,7 +202,7 @@ def _para(doc, text, size, *, bold=False, color=TEXT, center=False, before=0, af
     _rtl(p, WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.RIGHT)
     p.paragraph_format.space_before = Pt(before)
     p.paragraph_format.space_after = Pt(after)
-    p.paragraph_format.line_spacing = 1.0
+    p.paragraph_format.line_spacing = 1.08
     if keep:
         p._p.get_or_add_pPr().append(OxmlElement("w:keepLines"))
     if keep_next:
@@ -216,6 +227,7 @@ def _parties(doc, data):
     outer = doc.add_table(rows=1, cols=3)
     outer.alignment = WD_TABLE_ALIGNMENT.CENTER
     _fixed(outer)
+    _row_geometry(outer.rows[0], 3900)
     for c, width in zip(outer.rows[0].cells, (94, 6, 94)):
         c.width = Mm(width)
         _margins(c, 0, 0, 0, 0)
@@ -223,36 +235,38 @@ def _parties(doc, data):
     def card(host, heading, rows):
         t = host.add_table(rows=13, cols=2)
         _fixed(t)
+        for idx, row in enumerate(t.rows):
+            _row_geometry(row, 330 if idx == 0 else 300)
         h = t.rows[0].cells[0]
         h.merge(t.rows[0].cells[1])
         _shade(h, NAVY)
-        _cell_text(h, heading, 7.3, bold=True, color=WHITE, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell_text(h, heading, 8.0, bold=True, color=WHITE, align=WD_ALIGN_PARAGRAPH.CENTER)
         for i, (label, value) in enumerate(rows, 1):
             v, l = t.rows[i].cells
             _shade(l, LIGHT)
             for c in (v, l):
                 _border(c, "E1E7EF", 3)
-                _margins(c)
-            _cell_text(l, label, 5.7, bold=True, color=NAVY)
+                _margins(c, 60, 75, 60, 75)
+            _cell_text(l, label, 6.35, bold=True, color=NAVY)
             ltr = label in {"IBAN", "رقم الجوال", "البريد الإلكتروني", "الموقع الإلكتروني", "السجل التجاري", "الرقم الضريبي"}
-            _cell_text(v, value, 5.55, rtl=not ltr)
+            _cell_text(v, value, 6.05, rtl=not ltr)
     card(outer.cell(0, 0), "الطرف الثاني (التاجر)", merchant)
     card(outer.cell(0, 2), "الطرف الأول", pakgat)
 
 
 def _signing(doc):
-    t = doc.add_table(rows=4, cols=1)
+    t = doc.add_table(rows=3, cols=1)
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
     lines = (
-        ("إجراء التوقيع والاعتماد", 7.6, True),
-        ("يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل.", 6.7, False),
-        ("", 1, False),
-        ("نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية. لا يتم تفعيل حساب التاجر تلقائياً.", 6.4, True),
+        ("إجراء التوقيع والاعتماد", 8.2, True, 330),
+        ("يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل.", 7.2, False, 520),
+        ("نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية. لا يتم تفعيل حساب التاجر تلقائياً.", 7.0, True, 560),
     )
-    for i, (text, size, bold) in enumerate(lines):
+    for i, (text, size, bold, height) in enumerate(lines):
+        _row_geometry(t.rows[i], height)
         c = t.cell(i, 0)
-        _border(c, BORDER, 4, top=i == 0, bottom=i == 3)
-        _margins(c, 35, 90, 35, 90)
+        _border(c, BORDER, 4, top=i == 0, bottom=i == 2)
+        _margins(c, 70, 120, 70, 120)
         _cell_text(c, text, size, bold=bold, color=NAVY if bold else TEXT, align=WD_ALIGN_PARAGRAPH.CENTER)
 
 
@@ -269,20 +283,24 @@ def _approvals(doc, data):
     ]
     outer = doc.add_table(rows=1, cols=3)
     _fixed(outer)
+    _row_geometry(outer.rows[0], 2200)
     for c, width in zip(outer.rows[0].cells, (94, 6, 94)):
         c.width = Mm(width)
         _margins(c, 0, 0, 0, 0)
+
     def card(host, heading, lines):
         t = host.add_table(rows=6, cols=1)
         _fixed(t)
+        for idx, row in enumerate(t.rows):
+            _row_geometry(row, 330 if idx == 0 else 360)
         h = t.cell(0, 0)
         _shade(h, NAVY)
-        _cell_text(h, heading, 6.8, bold=True, color=WHITE, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell_text(h, heading, 7.7, bold=True, color=WHITE, align=WD_ALIGN_PARAGRAPH.CENTER)
         for i, line in enumerate(lines, 1):
             c = t.cell(i, 0)
             _border(c, BORDER, 3, top=False)
-            _margins(c)
-            _cell_text(c, line, 5.0)
+            _margins(c, 65, 90, 65, 90)
+            _cell_text(c, line, 5.9)
     card(outer.cell(0, 0), "الطرف الثاني (التاجر)", left)
     card(outer.cell(0, 2), "الطرف الأول", right)
 
@@ -296,38 +314,50 @@ def build_contract_docx_otp(data: contract_pdf.ContractData) -> bytes:
         doc = Document()
         _section(doc.sections[0])
         doc.styles["Normal"].font.name = "Arial"
-        doc.styles["Normal"].font.size = Pt(7)
+        doc.styles["Normal"].font.size = Pt(7.5)
 
         _header(doc, logo)
-        _para(doc, "لترويج وبيع العروض والقسائم الإلكترونية بين شركة تام العاصمة التجارية (Pakgat) والتاجر.", 6.8, center=True, after=1.5)
+        _para(doc, "لترويج وبيع العروض والقسائم الإلكترونية بين شركة تام العاصمة التجارية (Pakgat) والتاجر.", 7.4, center=True, after=2.0)
         meta = doc.add_table(rows=1, cols=2)
         meta.alignment = WD_TABLE_ALIGNMENT.CENTER
+        _row_geometry(meta.rows[0], 330)
         for c, text in zip(meta.rows[0].cells, (f"التاريخ: {data.agreement_date}", f"رقم الاتفاقية: {data.agreement_number}")):
-            _shade(c, LIGHT); _border(c); _cell_text(c, text, 7, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
+            _shade(c, LIGHT)
+            _border(c)
+            _cell_text(c, text, 7.6, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
         _title(doc, "أولاً: أطراف الاتفاقية")
         _parties(doc, data)
         _title(doc, "ثانياً: التمهيد")
-        _para(doc, "حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.", 6.25, after=1)
+        _para(doc, "حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.", 6.85, after=2)
         _signing(doc)
         _footer(doc.sections[0], 1, data.agreement_number)
 
         second = doc.add_section(WD_SECTION.NEW_PAGE)
-        _section(second); _footer(second, 2, data.agreement_number)
-        _header(doc, logo, compact=True); _title(doc, "ثالثاً: الشروط والأحكام (1)")
+        _section(second)
+        _footer(second, 2, data.agreement_number)
+        _header(doc, logo, compact=True)
+        _title(doc, "ثالثاً: الشروط والأحكام (1)")
         for n, title, body in CLAUSES[:7]:
-            _para(doc, f"{n}. {title}", 6.35, bold=True, color=NAVY, keep=True, keep_next=True)
-            _para(doc, body, 5.35, after=1.6, keep=True)
+            _para(doc, f"{n}. {title}", 7.0, bold=True, color=NAVY, before=0.2, keep=True, keep_next=True)
+            _para(doc, body, 5.85, after=2.6, keep=True)
 
         third = doc.add_section(WD_SECTION.NEW_PAGE)
-        _section(third); _footer(third, 3, data.agreement_number)
-        _header(doc, logo, compact=True); _title(doc, "ثالثاً: الشروط والأحكام (2)")
+        _section(third)
+        _footer(third, 3, data.agreement_number)
+        _header(doc, logo, compact=True)
+        _title(doc, "ثالثاً: الشروط والأحكام (2)")
         for n, title, body in CLAUSES[7:]:
-            _para(doc, f"{n}. {title}", 6.35, bold=True, color=NAVY, keep=True, keep_next=True)
-            _para(doc, body, 5.35, after=1.6, keep=True)
-        _title(doc, "رابعاً: الموافقة الإلكترونية والاعتماد النهائي", 7.6)
+            _para(doc, f"{n}. {title}", 6.9, bold=True, color=NAVY, before=0.2, keep=True, keep_next=True)
+            _para(doc, body, 5.7, after=2.2, keep=True)
+        _title(doc, "رابعاً: الموافقة الإلكترونية والاعتماد النهائي", 8.1)
         _approvals(doc, data)
         box = doc.add_table(rows=1, cols=1)
-        c = box.cell(0, 0); _shade(c, LIGHT); _border(c); _cell_text(c, ACTIVATION_COPY, 5.7, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _row_geometry(box.rows[0], 500)
+        c = box.cell(0, 0)
+        _shade(c, LIGHT)
+        _border(c)
+        _margins(c, 80, 120, 80, 120)
+        _cell_text(c, ACTIVATION_COPY, 6.3, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
 
         out = root / "merchant-agreement.docx"
         try:
