@@ -62,6 +62,15 @@ def test_contract_preserves_dynamic_values_legal_copy_and_otp_logic():
     assert "يقوم التاجر بتحميل هذه الاتفاقية وتوقيعها وختمها" not in xml
 
 
+def test_layout_has_explicit_card_heights_and_non_splitting_rows():
+    xml = _doc_xml(build_contract_docx(_sample()))
+    # Fixed heights keep the two party/approval cards visually balanced and
+    # use more of the A4 page instead of collapsing into the upper half.
+    assert xml.count("w:trHeight") >= 20
+    # Nested card rows must not split across pages during LibreOffice export.
+    assert xml.count("w:cantSplit") >= 20
+
+
 def test_renderer_passes_docx_to_converter_and_returns_pdf():
     seen = {}
 
