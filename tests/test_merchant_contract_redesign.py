@@ -55,6 +55,7 @@ def test_contract_preserves_dynamic_values_legal_copy_and_otp_logic():
         assert str(number) in xml
         assert title in xml
         assert body in xml
+    assert "الميزانيات الإعلانية" in xml
     assert patch.ACTIVATION_COPY in xml
     assert "لا يتم تفعيل حساب التاجر تلقائياً" in xml
     assert "الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي" in xml
