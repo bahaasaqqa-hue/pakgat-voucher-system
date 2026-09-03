@@ -119,6 +119,28 @@ class MerchantRedemptionNotification(Base):
     last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
 
+class CustomerNotification(Base):
+    __tablename__ = "customer_notifications"
+    __table_args__ = (
+        UniqueConstraint("voucher_id", "notification_type", name="uq_customer_notification_voucher_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    voucher_id: Mapped[int] = mapped_column(Integer, index=True)
+    notification_type: Mapped[str] = mapped_column(String(40), index=True)
+    customer_phone: Mapped[str] = mapped_column(String(30), index=True)
+    message_body: Mapped[str] = mapped_column(String(5000))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_value: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class SallaOAuthCredential(Base):
     __tablename__ = "salla_oauth_credentials"
 
@@ -192,6 +214,11 @@ def generate_verification_token() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    from app.jood_whatsapp_context import ensure_jood_whatsapp_context_schema
+    from app.salla_data import ensure_salla_retention_schema
+
+    ensure_jood_whatsapp_context_schema()
+    ensure_salla_retention_schema()
     # Populate the audit table for vouchers created before audit logging was added.
     # The operation is idempotent, so every deployment can run it safely.
     with SessionLocal() as db:
@@ -879,32 +906,83 @@ def build_voucher_whatsapp_message(
 
     partner_lines: list[str] = []
     if partner_name and str(partner_name).strip():
-        partner_lines.append(f"مقدم الخدمة: {str(partner_name).strip()}")
+        partner_lines.append(f"• *المكان:* {str(partner_name).strip()}")
     if partner_hours and str(partner_hours).strip():
-        partner_lines.append(f"ساعات العمل: {str(partner_hours).strip()}")
+        partner_lines.append(f"• *أوقات العمل:* {str(partner_hours).strip()}")
     if partner_contact and str(partner_contact).strip():
-        partner_lines.append(f"التواصل: {str(partner_contact).strip()}")
+        partner_lines.append(f"• *الجوال:* {str(partner_contact).strip()}")
     if partner_address and str(partner_address).strip():
-        partner_lines.append(f"العنوان: {str(partner_address).strip()}")
+        partner_lines.append(f"• *العنوان:* {str(partner_address).strip()}")
     if partner_map_url and str(partner_map_url).strip():
-        partner_lines.append(f"الموقع: {str(partner_map_url).strip()}")
-    partner_block = ("\n".join(partner_lines) + "\n\n") if partner_lines else ""
+        partner_lines.append(f"• *الموقع:* {str(partner_map_url).strip()}")
+    partner_block = (
+        "*تفاصيل مقدم الخدمة:*\n\n" + "\n".join(partner_lines) + "\n\n"
+        if partner_lines
+        else ""
+    )
 
     return (
-        "✅ قسيمتك جاهزة\n\n"
-        f"مرحباً {name}\n"
-        "تم إصدار قسيمتك بنجاح.\n"
-        "كود VIP: خصم 5% على طلبك القادم.\n\n"
-        f"العرض: {product_name}\n"
-        f"القسيمة: {voucher_code}\n"
-        f"الطلب: {order_id}\n\n"
-        "افتح قسيمتك واعرضها للتاجر عند استلام الخدمة:\n"
+        "*قسيمتك جاهزة وأمورك طيبة!*\n\n"
+        f"أهلاً {name} 👋\n\n"
+        "تم إصدار قسيمتك بنجاح، ومالك إلا اللي يرضيك:\n\n"
+        "• *كود VIP:* خصم 5% على طلبك القادم\n"
+        f"• *العرض:* {product_name}\n"
+        f"• *القسيمة:* {voucher_code}\n"
+        f"• *رقم الطلب:* {order_id}\n\n"
+        "افتح قسيمتك واعرضها للتاجر أول ما تطلع له:\n"
         f"{verification_url}\n\n"
         + partner_block
-        + "🔒 قسيمتك مسؤوليتك — اعرضها للتاجر فقط.\n\n"
+        + "🔒 _قسيمتك مسؤوليتك — لا توريها إلا للتاجر نفسه._\n\n"
         "https://pakgat.com\n"
-        "بدون قروشة.. بكجات تضبطك"
+        "*بدون قروشة.. بكجات تضبطك*\n\n"
+        "علشان نتطمن إن كل شيء وصلك تمام، رد علينا برقم واحد بس:\n\n"
+        "1 — وصلتني القسيمة\n"
+        "2 — أحتاج فزعة من خدمة العملاء"
     )
+
+
+def ensure_customer_notification(
+    db: Session,
+    voucher: Voucher,
+    notification_type: str,
+    message_body: str,
+    *,
+    commit: bool = True,
+) -> Optional[CustomerNotification]:
+    phone = normalize_saudi_phone(voucher.customer_phone or "")
+    if not phone:
+        return None
+    existing = db.scalar(
+        select(CustomerNotification).where(
+            CustomerNotification.voucher_id == voucher.id,
+            CustomerNotification.notification_type == notification_type,
+        )
+    )
+    if existing:
+        return existing
+    notification = CustomerNotification(
+        voucher_id=voucher.id,
+        notification_type=notification_type,
+        customer_phone=phone,
+        message_body=message_body,
+        status="queued",
+    )
+    db.add(notification)
+    try:
+        if commit:
+            db.commit()
+            db.refresh(notification)
+        else:
+            db.flush()
+        return notification
+    except IntegrityError:
+        db.rollback()
+        return db.scalar(
+            select(CustomerNotification).where(
+                CustomerNotification.voucher_id == voucher.id,
+                CustomerNotification.notification_type == notification_type,
+            )
+        )
 
 
 def send_voucher_whatsapp(
@@ -992,6 +1070,36 @@ def send_voucher_whatsapp(
                 f"phone={phone}; error={type(exc).__name__}: {exc}",
             )
 
+def build_redemption_whatsapp_message(
+    customer_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    merchant_name: str,
+    redeemed_at: datetime,
+) -> str:
+    name = (customer_name or "عميل بكجات").strip()
+    display_order_id = str(order_id or "").split(":", 1)[0]
+    used_at = fmt_dt(redeemed_at)
+    return (
+        "✅ *تم استخدام قسيمتك وتتهنا بها!*\n\n"
+        f"يا هلا {name} 👋\n"
+        f"تم تأكيد استلامك للخدمة عند {merchant_name} بالتمام والكمال.\n\n"
+        f"• *العرض:* {product_name}\n"
+        f"• *رقم القسيمة:* {voucher_code}\n"
+        f"• *رقم الطلب:* {display_order_id}\n"
+        f"• *وقت الاستخدام:* {used_at}\n\n"
+        "⭐ *لأنك عميل Pakgat، قدرك عندنا عالي وصرت VIP.*\n\n"
+        "🎁 يضبطك كود *VIP* بخصم 5% على طلبك الجاي!\n\n"
+        "جاهز لتجربتك الجاية؟ اطّلع على العروض من هنا:\n\n"
+        "https://pakgat.com\n"
+        "*بدون قروشة.. بكجات تضبطك* ✨\n\n"
+        "يهمنا رأيك علشان نطوّر خدمتك، كيف كانت تجربتك اليوم؟\n\n"
+        "رد علينا برقم تقييمك من 1 إلى 5، بحيث 5 ممتازة وتبيّض الوجه.\n\n"
+        "سعداء بخدمتك، ونشوفك على خير قريبًا 💙"
+    )
+
+
 def send_redemption_whatsapp(
     voucher_id: int,
     customer_phone: str,
@@ -1002,47 +1110,12 @@ def send_redemption_whatsapp(
     merchant_name: str,
     redeemed_at: datetime,
 ) -> None:
-    """Notify the customer only after a voucher redemption succeeds."""
+    """Legacy direct sender retained for compatibility; outbox code does not schedule it."""
     phone = normalize_saudi_phone(customer_phone)
-
-    if not phone:
-        with SessionLocal() as db:
-            log_event(
-                db,
-                "redemption_whatsapp_skipped",
-                voucher_id,
-                "Customer phone is missing.",
-            )
+    if not phone or not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
         return
-
-    if not WHATSLOOP_API_BASE_URL or not WHATSLOOP_API_TOKEN:
-        with SessionLocal() as db:
-            log_event(
-                db,
-                "redemption_whatsapp_skipped",
-                voucher_id,
-                "WhatsLoop environment variables are missing.",
-            )
-        return
-
-    name = (customer_name or "عميل بكجات").strip()
-    display_order_id = str(order_id or "").split(":", 1)[0]
-    used_at = fmt_dt(redeemed_at)
-    message = (
-        "✅ تم استبدال قسيمتك بنجاح\n\n"
-        f"مرحباً {name} 🎁\n\n"
-        f"تم تأكيد استلامك للخدمة لدى {merchant_name}.\n\n"
-        f"🎟️ العرض: {product_name}\n"
-        f"🔖 رقم القسيمة: {voucher_code}\n"
-        f"📦 رقم الطلب: {display_order_id}\n"
-        f"🕒 وقت الاستخدام: {used_at}\n\n"
-        "⭐ وبما أنك أصبحت من عملاء Pakgat، فأنت الآن VIP عندنا.\n\n"
-        "🎁 استمتع بخصم 5% على طلبك القادم باستخدام الكود: VIP\n\n"
-        "اكتشف عرضك القادم:\n"
-        "https://pakgat.com\n\n"
-        "نتمنى أن تكون تجربتك ناجحة، ونسعد بخدمتك مرة أخرى 💙\n\n"
-        "شكراً لاختيارك Pakgat\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+    message = build_redemption_whatsapp_message(
+        customer_name, product_name, voucher_code, order_id, merchant_name, redeemed_at
     )
 
     body = json.dumps(
@@ -1130,6 +1203,33 @@ def reserve_merchant_notification(
         return None
 
 
+def build_merchant_sale_whatsapp_message(
+    merchant_name: str,
+    product_name: str,
+    order_id: str,
+    quantity: int,
+    voucher_count: int,
+    merchant_pin: str,
+    *,
+    test_mode: bool = False,
+) -> str:
+    partner = (merchant_name or "شريك Pakgat").strip()
+    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد طلب حقيقي\n\n" if test_mode else ""
+    return (
+        test_prefix
+        + f"🎉 *جاتك بيعة جديدة لعرض {product_name}!*\n\n"
+        f"يا هلا {partner} 👋\n"
+        f"تم شراء {product_name} بنجاح عبر Pakgat، وأموركم طيبة.\n\n"
+        f"• *رقم الطلب:* {order_id}\n"
+        f"• *الكمية:* {quantity}\n"
+        f"• *عدد القسائم:* {voucher_count}\n\n"
+        "القسيمة الحين جاهزة عند العميل، وبيمرّك ويوريك كود الـQR قبل ما يأخذ الخدمة.\n\n"
+        f"🔐 *الرمز السري لتأكيد الاستلام:* {merchant_pin}\n\n"
+        "_تأكّد من مسح الرمز أو إدخال الكود أول ما يحضر العميل وتسلّمه الخدمة._\n\n"
+        "سعداء بشراكتنا معكم، ونطمح للأزين دايم 💙"
+    )
+
+
 def send_merchant_sale_whatsapp(
     notification_id: int,
     merchant_phone: str,
@@ -1141,7 +1241,6 @@ def send_merchant_sale_whatsapp(
     test_mode: bool = False,
 ) -> None:
     phone = normalize_saudi_phone(merchant_phone)
-    partner = (merchant_name or "شريك Pakgat").strip()
     sent_action = "merchant_whatsapp_test_sent" if test_mode else "merchant_whatsapp_sent"
     failed_action = "merchant_whatsapp_test_failed" if test_mode else "merchant_whatsapp_failed"
 
@@ -1175,19 +1274,14 @@ def send_merchant_sale_whatsapp(
             log_event(db, failed_action, details=f"order={order_id}; merchant PIN config missing")
         return
 
-    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد طلب حقيقي\n\n" if test_mode else ""
-    message = (
-        test_prefix
-        + f"🎉 تم بيع *{product_name}* عبر Pakgat\n\n"
-        f"مرحباً {partner}\n\n"
-        f"تم شراء *{product_name}* بنجاح عبر *Pakgat*.\n\n"
-        f"📦 رقم الطلب: {order_id}\n"
-        f"🔢 الكمية: {quantity}\n"
-        f"🎫 عدد القسائم: {voucher_count}\n\n"
-        "القسيمة أصبحت جاهزة لدى العميل، وسيقوم بعرض رمز QR *قبل استلام الخدمة*.\n\n"
-        f"🔐 *الرقم السري لتأكيد استلام الخدمة: {MERCHANT_NOTIFICATION_PIN}*\n\n"
-        "يتم تأكيد استلام الخدمة عند حضور العميل وعرض رمز QR الخاص بالقسيمة.\n\n"
-        "شكراً لشراكتكم مع *Pakgat* 💙"
+    message = build_merchant_sale_whatsapp_message(
+        merchant_name,
+        product_name,
+        order_id,
+        quantity,
+        voucher_count,
+        MERCHANT_NOTIFICATION_PIN,
+        test_mode=test_mode,
     )
 
     body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
@@ -1337,6 +1431,34 @@ def merchant_redemption_context(db: Session, voucher: Voucher) -> tuple[list[str
     return phones[:2], partner_name or "شريك Pakgat", base_order_id
 
 
+def build_merchant_redemption_whatsapp_message(
+    merchant_name: str,
+    product_name: str,
+    voucher_code: str,
+    order_id: str,
+    redeemed_at: datetime,
+    *,
+    test_mode: bool = False,
+) -> str:
+    partner = (merchant_name or "شريك Pakgat").strip()
+    used_at = fmt_dt(redeemed_at)
+    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد استبدال حقيقي\n\n" if test_mode else ""
+    return (
+        test_prefix
+        + "✅ *تم استخدام القسيمة وأموركم بالتمام!*\n\n"
+        f"يا هلا {partner} 👋\n"
+        "تم تأكيد تسليم الخدمة بنجاح عبر Pakgat، وبيّض الله وجهك.\n\n"
+        f"• *العرض:* {product_name}\n"
+        f"• *رقم القسيمة:* {voucher_code}\n"
+        f"• *رقم الطلب:* {order_id}\n"
+        f"• *وقت الاستخدام:* {used_at}\n\n"
+        "🔒 _القسيمة تحولت الآن إلى «مستخدمة»، وما عاد تتفعّل مرة ثانية._\n\n"
+        "سعداء جدًا بشراكتكم معنا، ونشوفك على خير 💙\n\n"
+        "https://pakgat.com\n"
+        "*بدون قروشة.. بكجات تضبطك* ✨"
+    )
+
+
 def send_merchant_redemption_whatsapp(
     notification_id: Optional[int],
     voucher_id: Optional[int],
@@ -1349,7 +1471,6 @@ def send_merchant_redemption_whatsapp(
     test_mode: bool = False,
 ) -> bool:
     phone = normalize_saudi_phone(merchant_phone)
-    partner = (merchant_name or "شريك Pakgat").strip()
     sent_action = (
         "merchant_redemption_whatsapp_test_sent"
         if test_mode
@@ -1383,20 +1504,13 @@ def send_merchant_redemption_whatsapp(
         mark_failed("WhatsLoop environment variables are missing")
         return False
 
-    used_at = fmt_dt(redeemed_at)
-    test_prefix = "🧪 رسالة اختبار من Pakgat — لا يوجد استبدال حقيقي\n\n" if test_mode else ""
-    message = (
-        test_prefix
-        + "✅ تم تأكيد استبدال القسيمة\n\n"
-        f"مرحباً {partner}\n\n"
-        "تم تأكيد استلام الخدمة بنجاح عبر *Pakgat*.\n\n"
-        f"🎟️ العرض: {product_name}\n"
-        f"🔖 رقم القسيمة: {voucher_code}\n"
-        f"📦 رقم الطلب: {order_id}\n"
-        f"🕒 وقت الاستبدال: {used_at}\n\n"
-        "أصبحت القسيمة الآن *مستخدمة* ولا يمكن استخدامها مرة أخرى.\n\n"
-        "شكراً لشراكتكم مع *Pakgat* 💙\n"
-        "بدون قروشة.. بكجات تضبطك ✨"
+    message = build_merchant_redemption_whatsapp_message(
+        merchant_name,
+        product_name,
+        voucher_code,
+        order_id,
+        redeemed_at,
+        test_mode=test_mode,
     )
 
     body = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
@@ -1482,7 +1596,7 @@ def notify_merchant_after_redemption(voucher_id: int) -> None:
         )
 
 
-def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7) -> Voucher:
+def create_voucher_record(db: Session, order_id: str, product_id: str, product_name: str, merchant_name: str, customer_name: Optional[str], customer_phone: Optional[str], option_name: Optional[str], validity_days: int = 7, *, commit: bool = True) -> Voucher:
     existing = db.scalar(select(Voucher).where(Voucher.order_id == order_id, Voucher.product_id == product_id))
     if existing:
         return existing
@@ -1490,7 +1604,11 @@ def create_voucher_record(db: Session, order_id: str, product_id: str, product_n
         voucher = Voucher(code=generate_voucher_code(), verification_token=generate_verification_token(), order_id=order_id, product_id=product_id, product_name=product_name, merchant_name=merchant_name, customer_name=customer_name, customer_phone=customer_phone, option_name=option_name, status="active", expires_at=now_utc() + timedelta(days=validity_days))
         db.add(voucher)
         try:
-            db.commit(); db.refresh(voucher); return voucher
+            if commit:
+                db.commit(); db.refresh(voucher)
+            else:
+                db.flush()
+            return voucher
         except Exception:
             db.rollback()
     raise HTTPException(status_code=500, detail="Unable to generate a unique voucher")
@@ -1671,25 +1789,32 @@ async def redeem_voucher(verification_token: str, request: Request, background_t
         return HTMLResponse(build_verification_page(voucher, "لم يتم إعداد رمز لهذا التاجر. تواصل مع إدارة بكجات."), status_code=503)
     if not hmac.compare_digest(entered, expected):
         return HTMLResponse(build_verification_page(voucher, "رمز التاجر غير صحيح."), status_code=403)
-    result = db.execute(update(Voucher).where(Voucher.id == voucher.id, Voucher.status == "active", Voucher.expires_at >= now_utc()).values(status="redeemed", redeemed_at=now_utc()).execution_options(synchronize_session=False))
-    db.commit()
-    db.refresh(voucher)
+    redeemed_at = now_utc()
+    result = db.execute(update(Voucher).where(Voucher.id == voucher.id, Voucher.status == "active", Voucher.expires_at >= redeemed_at).values(status="redeemed", redeemed_at=redeemed_at).execution_options(synchronize_session=False))
     if result.rowcount != 1:
+        db.rollback()
         log_event(db, "redeem_conflict", voucher.id, "Concurrent or invalid redemption attempt")
         update_voucher_status(voucher, db)
         return HTMLResponse(build_verification_page(voucher, "تعذر اعتماد القسيمة؛ ربما تم استخدامها في نفس اللحظة."), status_code=409)
-    log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
-    background_tasks.add_task(
-        send_redemption_whatsapp,
-        voucher.id,
-        voucher.customer_phone or "",
+    voucher.status = "redeemed"
+    voucher.redeemed_at = redeemed_at
+    ensure_customer_notification(
+        db,
+        voucher,
+        "voucher_redeemed",
+        build_redemption_whatsapp_message(
         voucher.customer_name or "",
         voucher.product_name,
         voucher.code,
         voucher.order_id,
         voucher.merchant_name,
-        voucher.redeemed_at or now_utc(),
+        redeemed_at,
+        ),
+        commit=False,
     )
+    db.commit()
+    db.refresh(voucher)
+    log_event(db, "voucher_redeemed", voucher.id, "Redeemed by merchant QR page")
     background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return HTMLResponse(build_verification_page(voucher))
 
@@ -1782,7 +1907,23 @@ async def admin_create_voucher(request: Request, db: Session = Depends(get_db)):
     get = lambda k, d="": f.get(k, [d])[0].strip()
     try:
         validity = max(1, min(365, int(get("validity_days", "7"))))
-        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity)
+        voucher = create_voucher_record(db, get("order_id"), get("product_id"), get("product_name"), get("merchant_name"), get("customer_name") or None, get("customer_phone") or None, get("option_name") or None, validity, commit=False)
+        verification_url = BASE_URL + "/v/" + voucher.verification_token
+        ensure_customer_notification(
+            db,
+            voucher,
+            "voucher_issued",
+            build_voucher_whatsapp_message(
+                customer_name=voucher.customer_name or "عميل بكجات",
+                product_name=voucher.product_name,
+                voucher_code=voucher.code,
+                order_id=voucher.order_id,
+                verification_url=verification_url,
+            ),
+            commit=False,
+        )
+        db.commit()
+        db.refresh(voucher)
         log_event(db, "voucher_created", voucher.id, "Created from admin dashboard")
     except Exception as exc:
         return HTMLResponse(page_shell("تعذر الإنشاء", f"<main class='wrap' style='padding:40px 0'><div class='alert alert-error'>تعذر إنشاء القسيمة: {esc(exc)}</div></main>", admin=True), status_code=400)
@@ -1817,24 +1958,31 @@ def admin_redeem_voucher(voucher_id: int, request: Request, background_tasks: Ba
     voucher = db.get(Voucher, voucher_id)
     if not voucher:
         raise HTTPException(status_code=404, detail="Voucher not found")
-    result = db.execute(update(Voucher).where(Voucher.id == voucher_id, Voucher.status == "active", Voucher.expires_at >= now_utc()).values(status="redeemed", redeemed_at=now_utc()).execution_options(synchronize_session=False))
-    db.commit()
+    redeemed_at = now_utc()
+    result = db.execute(update(Voucher).where(Voucher.id == voucher_id, Voucher.status == "active", Voucher.expires_at >= redeemed_at).values(status="redeemed", redeemed_at=redeemed_at).execution_options(synchronize_session=False))
     if result.rowcount != 1:
+        db.rollback()
         log_event(db, "admin_redeem_failed", voucher_id, "Voucher was not active")
         raise HTTPException(status_code=409, detail="Voucher is not active")
-    db.refresh(voucher)
-    log_event(db, "voucher_redeemed", voucher_id, "Redeemed from admin dashboard")
-    background_tasks.add_task(
-        send_redemption_whatsapp,
-        voucher.id,
-        voucher.customer_phone or "",
+    voucher.status = "redeemed"
+    voucher.redeemed_at = redeemed_at
+    ensure_customer_notification(
+        db,
+        voucher,
+        "voucher_redeemed",
+        build_redemption_whatsapp_message(
         voucher.customer_name or "",
         voucher.product_name,
         voucher.code,
         voucher.order_id,
         voucher.merchant_name,
-        voucher.redeemed_at or now_utc(),
+        redeemed_at,
+        ),
+        commit=False,
     )
+    db.commit()
+    db.refresh(voucher)
+    log_event(db, "voucher_redeemed", voucher_id, "Redeemed from admin dashboard")
     background_tasks.add_task(notify_merchant_after_redemption, voucher.id)
     return RedirectResponse(f"/admin/vouchers/{voucher_id}", status_code=303)
 
@@ -2728,6 +2876,24 @@ async def salla_webhook(
                 )
             )
             if existing:
+                verification_url = BASE_URL + "/v/" + existing.verification_token
+                ensure_customer_notification(
+                    db,
+                    existing,
+                    "voucher_issued",
+                    build_voucher_whatsapp_message(
+                        customer_name=existing.customer_name or customer_name,
+                        product_name=existing.product_name,
+                        voucher_code=existing.code,
+                        order_id=base_order_id,
+                        verification_url=verification_url,
+                        partner_name=customer_partner_name or None,
+                        partner_hours=partner_hours,
+                        partner_contact=partner_contact,
+                        partner_address=partner_address,
+                        partner_map_url=partner_map_url,
+                    ),
+                )
                 log_event(
                     db,
                     "voucher_already_exists",
@@ -2746,8 +2912,29 @@ async def salla_webhook(
                 customer_phone=customer_phone,
                 option_name=item_option_name(item),
                 validity_days=int(env("DEFAULT_VALIDITY_DAYS", "7")),
+                commit=False,
             )
             verification_url = BASE_URL + "/v/" + voucher.verification_token
+            ensure_customer_notification(
+                db,
+                voucher,
+                "voucher_issued",
+                build_voucher_whatsapp_message(
+                    customer_name=customer_name,
+                    product_name=voucher.product_name,
+                    voucher_code=voucher.code,
+                    order_id=base_order_id,
+                    verification_url=verification_url,
+                    partner_name=customer_partner_name or None,
+                    partner_hours=partner_hours,
+                    partner_contact=partner_contact,
+                    partner_address=partner_address,
+                    partner_map_url=partner_map_url,
+                ),
+                commit=False,
+            )
+            db.commit()
+            db.refresh(voucher)
             created.append(
                 {"code": voucher.code, "verification_url": verification_url}
             )
@@ -2767,23 +2954,7 @@ async def salla_webhook(
                     verification_url,
                     voucher.expires_at,
                 )
-            if customer_phone:
-                background_tasks.add_task(
-                    send_voucher_whatsapp,
-                    voucher.id,
-                    customer_phone,
-                    customer_name,
-                    voucher.product_name,
-                    voucher.code,
-                    base_order_id,
-                    verification_url,
-                    customer_partner_name or None,
-                    partner_hours,
-                    partner_contact,
-                    partner_address,
-                    partner_map_url,
-                )
-            else:
+            if not customer_phone:
                 log_event(
                     db,
                     "whatsapp_skipped",

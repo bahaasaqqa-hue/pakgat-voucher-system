@@ -1,0 +1,7 @@
+Spec self-review — 2026-08-30
+
+- Placeholder scan: no TBD/TODO placeholders.
+- Scope check: limited to post-sign completion, signed-document delivery, Merchant UI/audit, and admin retry. Sadq request creation and annexes remain explicitly out of scope.
+- Consistency check: MerchantContract remains the contract source; Merchant.status remains independent from contract status; WhatsApp failures never roll back a signed contract.
+- Security check: secrets remain server-side; webhook token is mandatory; inbound payload cannot overwrite merchant contact phone or auto-create merchants.
+- External API check: only the publicly documented Sadq signed-document endpoint is named. Bearer-token acquisition is deliberately not invented.

@@ -1,0 +1,24 @@
+[Unit]
+Description=Pakgat Voucher FastAPI Service
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=pakgat
+Group=pakgat
+WorkingDirectory=/opt/pakgat-voucher-system
+EnvironmentFile=/etc/pakgat/pakgat.env
+ExecStart=/opt/pakgat-voucher-system/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/pakgat-voucher-system
+
+[Install]
+WantedBy=multi-user.target

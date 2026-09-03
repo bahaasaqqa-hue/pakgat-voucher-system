@@ -1,0 +1,14 @@
+[Unit]
+Description=Pakgat voucher lifecycle expiry sweep
+After=network-online.target pakgat-voucher.service
+
+[Service]
+Type=oneshot
+User=pakgat
+Group=pakgat
+WorkingDirectory=/opt/pakgat-voucher-system
+EnvironmentFile=/etc/pakgat/pakgat.env
+ExecStart=/opt/pakgat-voucher-system/.venv/bin/python -m app.voucher_lifecycle_dashboard
+
+[Install]
+WantedBy=multi-user.target

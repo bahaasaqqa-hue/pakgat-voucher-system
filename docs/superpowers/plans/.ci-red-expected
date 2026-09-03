@@ -1,0 +1,1 @@
+The next PR CI run is intentionally expected to fail on tests/test_merchant_contracts.py before Task 1 production code exists.
