@@ -12,18 +12,8 @@ def _ltr(value: str) -> str:
     return f'<span class="ltr">{contract_pdf._e(value)}</span>'
 
 
-def _row(label: str, value: str, *, ltr: bool = False) -> str:
-    rendered = _ltr(value) if ltr else contract_pdf._e(value)
-    return (
-        '<tr>'
-        f'<th width="34%" bgcolor="#f7f9fc">{contract_pdf._e(label)}</th>'
-        f'<td width="66%" bgcolor="#ffffff">{rendered}</td>'
-        '</tr>'
-    )
-
-
-def _blank_row() -> str:
-    return '<tr class="blank-row"><th bgcolor="#f7f9fc">&nbsp;</th><td bgcolor="#ffffff">&nbsp;</td></tr>'
+def _value(value: str, *, ltr: bool = False) -> str:
+    return _ltr(value) if ltr else contract_pdf._e(value)
 
 
 def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
@@ -42,8 +32,8 @@ def _clause(number: int, title: str, body: str, *, page_title: str = "") -> str:
 
 def _brand_header() -> str:
     return '''<table class="brand" dir="ltr" width="100%"><tr>
-      <td width="33%" class="brand-spacer" align="left">&nbsp;</td>
-      <td width="33%" class="brand-logo-cell" align="center"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat" width="88" height="42"></td>
+      <td width="33%" align="left">&nbsp;</td>
+      <td width="34%" class="brand-logo-cell" align="center"><img class="brand-logo" src="pakgat-logo.jpg" alt="Pakgat" width="88" height="42"></td>
       <td width="33%" class="brand-title" align="right"><span dir="rtl">اتفاقية شراكة تجارية</span></td>
     </tr></table>
     <table class="brand-rule" width="100%"><tr><td>&nbsp;</td></tr></table>'''
@@ -62,40 +52,105 @@ def _prepare_logo_for_libreoffice(payload: bytes) -> bytes:
     data = bytearray(payload)
     marker = data.find(b"JFIF\x00")
     if marker != -1 and marker + 12 <= len(data):
-        # JFIF: identifier(5), version(2), units(1), Xdensity(2), Ydensity(2).
         units = marker + 7
         density = (1000).to_bytes(2, "big")
-        data[units] = 1  # dots per inch
+        data[units] = 1
         data[units + 1:units + 3] = density
         data[units + 3:units + 5] = density
     return bytes(data)
 
 
-def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
-    merchant_rows = "".join([
-        _row("اسم المنشأة", data.legal_name),
-        _row("النشاط", data.activity),
-        _row("السجل التجاري", data.commercial_registration, ltr=True),
-        _row("الرقم الضريبي", data.tax_number, ltr=True),
-        _row("البنك", data.bank_name),
-        _row("IBAN", data.iban, ltr=True),
-        _row("رقم الجوال", data.contact_phone, ltr=True),
-        _row("البريد الإلكتروني", data.contact_email, ltr=True),
-        _row("الموقع الإلكتروني", data.website or "لا يوجد", ltr=True),
-        _row("العنوان", data.national_address),
-        _row("اسم الممثل", data.representative_name),
-        _row("صفة الممثل", data.representative_title),
-    ])
-    pakgat_rows = "".join([
-        _row("الاسم", "شركة تام العاصمة التجارية (Pakgat)"),
-        _row("السجل التجاري", "1009100740", ltr=True),
-        _row("الرقم الضريبي", "312531659100003", ltr=True),
-        _row("الموقع الإلكتروني", "https://pakgat.com", ltr=True),
-        _row("IBAN", "SA1710000026700000717001", ltr=True),
-        _row("العنوان", "المملكة العربية السعودية"),
-        _blank_row(), _blank_row(), _blank_row(), _blank_row(), _blank_row(), _blank_row(),
-    ])
+def _party_table(data: contract_pdf.ContractData) -> str:
+    merchant = [
+        ("اسم المنشأة", data.legal_name, False),
+        ("النشاط", data.activity, False),
+        ("السجل التجاري", data.commercial_registration, True),
+        ("الرقم الضريبي", data.tax_number, True),
+        ("البنك", data.bank_name, False),
+        ("IBAN", data.iban, True),
+        ("رقم الجوال", data.contact_phone, True),
+        ("البريد الإلكتروني", data.contact_email, True),
+        ("الموقع الإلكتروني", data.website or "لا يوجد", True),
+        ("العنوان", data.national_address, False),
+        ("اسم الممثل", data.representative_name, False),
+        ("صفة الممثل", data.representative_title, False),
+    ]
+    pakgat = [
+        ("الاسم", "شركة تام العاصمة التجارية (Pakgat)", False),
+        ("السجل التجاري", "1009100740", True),
+        ("الرقم الضريبي", "312531659100003", True),
+        ("الموقع الإلكتروني", "https://pakgat.com", True),
+        ("IBAN", "SA1710000026700000717001", True),
+        ("العنوان", "المملكة العربية السعودية", False),
+    ]
 
+    rows = []
+    for i in range(len(merchant)):
+        ml, mv, mltr = merchant[i]
+        if i < len(pakgat):
+            pl, pv, pltr = pakgat[i]
+            p_value = _value(pv, ltr=pltr)
+            p_label = contract_pdf._e(pl)
+        else:
+            p_value = "&nbsp;"
+            p_label = "&nbsp;"
+        rows.append(
+            '<tr>'
+            f'<td class="party-value merchant-value" width="31%">{_value(mv, ltr=mltr)}</td>'
+            f'<th class="party-label merchant-label" width="18%">{contract_pdf._e(ml)}</th>'
+            '<td class="party-gap" width="2%">&nbsp;</td>'
+            f'<td class="party-value pakgat-value" width="31%">{p_value}</td>'
+            f'<th class="party-label pakgat-label" width="18%">{p_label}</th>'
+            '</tr>'
+        )
+
+    return f'''<table class="parties-flat" dir="ltr" width="100%" cellspacing="0" cellpadding="0">
+      <tr>
+        <th colspan="2" class="party-head" bgcolor="#123d80">الطرف الثاني (التاجر)</th>
+        <td class="party-gap" width="2%">&nbsp;</td>
+        <th colspan="2" class="party-head" bgcolor="#123d80">الطرف الأول</th>
+      </tr>
+      {''.join(rows)}
+    </table>'''
+
+
+def _approval_table(data: contract_pdf.ContractData, agreement: str) -> str:
+    merchant = [
+        f'الاسم: {contract_pdf._e(data.representative_name)}',
+        f'الصفة: {contract_pdf._e(data.representative_title)}',
+        f'الجوال: {_ltr(data.contact_phone)}',
+        'الموافقة: إلكترونياً عبر رمز تحقق OTP',
+        f'رقم الاتفاقية: {agreement}',
+    ]
+    pakgat = [
+        '<b>شركة تام العاصمة التجارية (Pakgat)</b>',
+        f'الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}',
+        f'الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}',
+        'الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب',
+        'الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي',
+    ]
+
+    rows = []
+    for left, right in zip(merchant, pakgat):
+        rows.append(
+            '<tr>'
+            f'<td class="approval-cell" width="49%" dir="rtl">{left}</td>'
+            '<td class="approval-gap" width="2%">&nbsp;</td>'
+            f'<td class="approval-cell" width="49%" dir="rtl">{right}</td>'
+            '</tr>'
+        )
+
+    return f'''<table class="approvals-flat" dir="ltr" width="100%" cellspacing="0" cellpadding="0">
+      <tr>
+        <th class="approval-head" width="49%" bgcolor="#123d80">الطرف الثاني (التاجر)</th>
+        <td class="approval-gap" width="2%">&nbsp;</td>
+        <th class="approval-head" width="49%" bgcolor="#123d80">الطرف الأول</th>
+      </tr>
+      {''.join(rows)}
+    </table>'''
+
+
+def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     clauses_1 = "".join([
         _clause(1, "التزامات الطرف الأول (Pakgat)", "تتولى Pakgat تصميم ونشر وتسويق العروض عبر المنصة، وإصدار القسائم الإلكترونية وتوفير نظام التحقق منها، وتحصيل قيمة الطلبات وتحويل صافي مستحقات التاجر وفق البيانات المالية المعتمدة، مع تقديم دعم المنصة. ولا تضمن Pakgat عدداً محدداً من المبيعات أو العملاء.", page_title="ثالثاً: الشروط والأحكام (1)"),
         _clause(2, "التزامات الطرف الثاني (التاجر)", "يلتزم التاجر بتقديم الخدمة أو المنتج بالمواصفات والسعر والشروط المعتمدة، وقبول القسائم الصالحة دون رسوم غير معلنة، وضمان صحة بياناته وأسعاره وتراخيصه والمحافظة على وسائل التحقق، ويتحمل المسؤولية النظامية عن جودة ما يقدمه وأي مطالبات ناشئة عنه."),
@@ -138,16 +193,12 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .section-title { margin:6px 0 5px; table-layout:fixed; }
     .section-title td { color:#123d80; border-bottom:1px solid #c6d3e6; padding:4px 0; font-weight:bold; font-size:10.4pt; text-align:center; }
 
-    .party-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin:0 0 6px; background:#fff; }
-    .party-grid > tbody > tr > td { vertical-align:top; padding:0 3px; background:#fff; }
-    .party-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; background:#fff; }
-    .party-card-title { background:#123d80; color:#fff; font-size:10pt; font-weight:bold; padding:5px 6px; text-align:center; }
-    .data { width:100%; table-layout:fixed; font-size:7.45pt; background:#fff; }
-    .data th, .data td { border-bottom:1px solid #e1e7ef; padding:3px 5px; vertical-align:middle; text-align:right; }
-    .data th { background:#f7f9fc; color:#254a80; font-weight:bold; }
-    .data td { background:#fff; color:#172b4d; }
-    .blank-row th { color:#f7f9fc; background:#f7f9fc; }
-    .blank-row td { color:#fff; background:#fff; }
+    .parties-flat { width:100%; table-layout:fixed; margin:0 0 6px; }
+    .party-head { background:#123d80; color:#fff; font-size:10pt; font-weight:bold; padding:5px 6px; text-align:center; }
+    .party-label, .party-value { border:1px solid #e1e7ef; padding:3px 5px; vertical-align:middle; }
+    .party-label { background:#f7f9fc; color:#254a80; font-weight:bold; text-align:right; direction:rtl; }
+    .party-value { background:#fff; color:#172b4d; text-align:right; direction:rtl; }
+    .party-gap { border:0 !important; background:#fff !important; }
 
     .intro-table { width:100%; table-layout:fixed; margin-bottom:5px; }
     .intro-table td { padding:4px 7px 6px; line-height:1.45; text-align:right; }
@@ -163,12 +214,11 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     .clause-title { color:#123d80; font-size:10pt; margin:0 0 2px; text-align:right; }
     .clause-body { color:#263b61; font-size:7.9pt; line-height:1.38; margin:0; text-align:right; }
 
-    .approval-grid { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:6px 0; margin-top:5px; }
-    .approval-grid > tbody > tr > td { vertical-align:top; padding:0 3px; background:#fff; }
-    .approval-card { width:100%; table-layout:fixed; border:1px solid #cbd7e7; direction:rtl; background:#fff; }
-    .approval-card-title { background:#123d80; color:#fff; font-size:9.5pt; font-weight:bold; padding:5px 6px; text-align:center; }
-    .approval-card td { padding:3px 6px; text-align:right; font-size:7.7pt; line-height:1.32; background:#fff; }
-    .approval-card .approval-card-title { background:#123d80; color:#fff; text-align:center; }
+    .approvals-flat { width:100%; table-layout:fixed; margin-top:5px; }
+    .approval-head { background:#123d80; color:#fff; font-size:9.5pt; font-weight:bold; padding:5px 6px; text-align:center; }
+    .approval-cell { border-left:1px solid #cbd7e7; border-right:1px solid #cbd7e7; padding:3px 7px; text-align:right; font-size:7.7pt; line-height:1.32; background:#fff; }
+    .approvals-flat tr:last-child .approval-cell { border-bottom:1px solid #cbd7e7; }
+    .approval-gap { border:0 !important; background:#fff !important; }
     .activation-box { width:100%; table-layout:fixed; border:1px solid #cdd9ea; margin-top:6px; }
     .activation-box td { padding:7px 9px; background:#f7f9fc; color:#123d80; font-weight:bold; font-size:8.2pt; text-align:center; line-height:1.35; }
 
@@ -179,44 +229,8 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
 
     agreement = _ltr(data.agreement_number)
     header = _brand_header()
-
-    party_grid = f'''<table class="party-grid" dir="ltr" width="100%" bgcolor="#ffffff"><tr>
-      <td width="50%" class="merchant-cell" bgcolor="#ffffff">
-        <table class="party-card" dir="rtl" width="100%" bgcolor="#ffffff">
-          <tr><td class="party-card-title" bgcolor="#123d80">الطرف الثاني (التاجر)</td></tr>
-          <tr><td style="padding:0" bgcolor="#ffffff"><table class="data" dir="rtl" width="100%" bgcolor="#ffffff">{merchant_rows}</table></td></tr>
-        </table>
-      </td>
-      <td width="50%" class="pakgat-cell" bgcolor="#ffffff">
-        <table class="party-card" dir="rtl" width="100%" bgcolor="#ffffff">
-          <tr><td class="party-card-title" bgcolor="#123d80">الطرف الأول</td></tr>
-          <tr><td style="padding:0" bgcolor="#ffffff"><table class="data" dir="rtl" width="100%" bgcolor="#ffffff">{pakgat_rows}</table></td></tr>
-        </table>
-      </td>
-    </tr></table>'''
-
-    approval_grid = f'''<table class="approval-grid" dir="ltr" width="100%" bgcolor="#ffffff"><tr>
-      <td width="50%" bgcolor="#ffffff">
-        <table class="approval-card" dir="rtl" width="100%" bgcolor="#ffffff">
-          <tr><td class="approval-card-title" bgcolor="#123d80">الطرف الثاني (التاجر)</td></tr>
-          <tr><td bgcolor="#ffffff">الاسم: {contract_pdf._e(data.representative_name)}</td></tr>
-          <tr><td bgcolor="#ffffff">الصفة: {contract_pdf._e(data.representative_title)}</td></tr>
-          <tr><td bgcolor="#ffffff">الجوال: {_ltr(data.contact_phone)}</td></tr>
-          <tr><td bgcolor="#ffffff">الموافقة: إلكترونياً عبر رمز تحقق OTP</td></tr>
-          <tr><td bgcolor="#ffffff">رقم الاتفاقية: {agreement}</td></tr>
-        </table>
-      </td>
-      <td width="50%" bgcolor="#ffffff">
-        <table class="approval-card" dir="rtl" width="100%" bgcolor="#ffffff">
-          <tr><td class="approval-card-title" bgcolor="#123d80">الطرف الأول</td></tr>
-          <tr><td bgcolor="#ffffff"><b>شركة تام العاصمة التجارية (Pakgat)</b></td></tr>
-          <tr><td bgcolor="#ffffff">الاسم: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_NAME)}</td></tr>
-          <tr><td bgcolor="#ffffff">الصفة: {contract_pdf._e(contract_pdf.PAKGAT_SIGNER_TITLE)}</td></tr>
-          <tr><td bgcolor="#ffffff">الاعتماد: قرار Pakgat النهائي بعد مراجعة الطلب</td></tr>
-          <tr><td bgcolor="#ffffff">الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي</td></tr>
-        </table>
-      </td>
-    </tr></table>'''
+    parties = _party_table(data)
+    approvals = _approval_table(data, agreement)
 
     return f'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>{css}</style></head><body>
 <section class="page" id="contract-page-1">
@@ -227,7 +241,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
     <td width="50%"><b>رقم الاتفاقية:</b> {agreement}</td>
   </tr></table>
   <table class="section-title" width="100%"><tr><td>أولاً: أطراف الاتفاقية</td></tr></table>
-  {party_grid}
+  {parties}
   <table class="section-title" width="100%"><tr><td>ثانياً: التمهيد</td></tr></table>
   <table class="intro-table"><tr><td>حيث إن الطرف الأول يدير منصة إلكترونية متخصصة في تسويق وبيع العروض والباقات والقسائم الإلكترونية، ويرغب الطرف الثاني في عرض خدماته أو منتجاته عبر المنصة للوصول إلى عملاء جدد، فقد اتفق الطرفان – وهما بكامل أهليتهما المعتبرة – على ما يلي، ويعد هذا التمهيد جزءاً لا يتجزأ من الاتفاقية.</td></tr></table>
   <table class="signing-box"><tr><td class="signing-title">إجراء التوقيع والاعتماد</td></tr><tr><td>يراجع التاجر هذه الاتفاقية داخل بوابة Pakgat ويؤكد موافقته عليها باستخدام رمز تحقق OTP مستقل يرسل إلى رقم الجوال المسجل.</td></tr><tr><td class="signing-separator">&nbsp;</td></tr><tr><td>نجاح رمز التحقق يعد موافقة إلكترونية موثقة على رقم الاتفاقية المعروض، ثم ينتقل الطلب إلى مراجعة Pakgat النهائية.<br><b>لا يتم تفعيل حساب التاجر تلقائياً.</b></td></tr></table>
@@ -246,7 +260,7 @@ def build_contract_html_otp(data: contract_pdf.ContractData) -> str:
   {header}
   {clauses_2}
   <table class="section-title" width="100%"><tr><td>رابعاً: الموافقة الإلكترونية والاعتماد النهائي</td></tr></table>
-  {approval_grid}
+  {approvals}
   <table class="activation-box"><tr><td>نجاح OTP يثبت موافقة التاجر على الاتفاقية ولا يفعّل الحساب تلقائياً. يصبح الحساب Active فقط بعد الموافقة النهائية من Pakgat على طلب التسجيل.</td></tr></table>
   {_footer(agreement, 3)}
 </section>
