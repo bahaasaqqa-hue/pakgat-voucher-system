@@ -1,6 +1,11 @@
-"""Contract redesign regression tests."""
-from app import merchant_contract_pdf_otp_patch  # noqa: F401 - activate OTP contract copy
-from app.merchant_contract_pdf import ContractData, build_contract_html
+"""Merchant contract DOCX rendering regression tests."""
+from __future__ import annotations
+
+import zipfile
+from io import BytesIO
+
+from app import merchant_contract_pdf_otp_patch as patch
+from app.merchant_contract_pdf import ContractData, build_contract_docx, render_contract_pdf
 
 
 def _sample():
@@ -15,52 +20,62 @@ def _sample():
     )
 
 
-def test_contract_is_branded_otp_signing_and_three_pages():
-    html = build_contract_html(_sample())
-    assert "بكجات" in html
-    assert 'src="pakgat-logo.jpg"' in html
-    assert html.count('<section class="page"') == 3
-    assert html.count('class="brand-logo"') == 3
-    assert 'صفحة 1 من 3' in html
-    assert 'صفحة 2 من 3' in html
-    assert 'صفحة 3 من 3' in html
-    assert "OTP" in html
-    assert "الموافقة الإلكترونية" in html
-    assert "الموافقة النهائية" in html
-    assert "يقوم التاجر بتحميل هذه الاتفاقية وتوقيعها وختمها" not in html
-    assert "display:grid" not in html
-    assert "display:flex" not in html
-    assert "position:fixed" not in html.replace(" ", "")
-    assert "صادق" not in html
-    assert "نفاذ" not in html
+def _doc_xml(docx_bytes: bytes) -> str:
+    with zipfile.ZipFile(BytesIO(docx_bytes)) as archive:
+        return archive.read("word/document.xml").decode("utf-8")
 
 
-def test_contract_uses_libreoffice_safe_tables_and_explicit_page_breaks():
-    html = build_contract_html(_sample())
-    assert html.count('class="page-break"') == 2
-    assert '.page-break { page-break-before:always;' in html
-    assert html.count('class="brand" dir="ltr"') == 3
-    assert 'width="33%" class="brand-logo-cell" align="center"' in html
-    assert 'width="33%" class="brand-title" align="right"' in html
-    assert 'class="party-grid" dir="ltr"' in html
-    assert 'width="50%" class="merchant-cell"' in html
-    assert 'width="50%" class="pakgat-cell"' in html
-    assert html.count('class="party-card-title"') == 2
-    assert 'class="signing-box"' in html
-    assert 'class="activation-box"' in html
-    assert 'class="approval-grid" dir="ltr"' in html
-
-    page2 = html.split('id="contract-page-2">', 1)[1].split('id="contract-page-3">', 1)[0]
-    page3 = html.split('id="contract-page-3">', 1)[1]
-    assert "7. السرية وحماية البيانات" in page2
-    assert "8. حدود الصلاحيات والتعديلات" not in page2
-    assert "8. حدود الصلاحيات والتعديلات" in page3
-    assert "13. أحكام عامة" in page3
-    assert "رابعاً: الموافقة الإلكترونية والاعتماد النهائي" in page3
+def test_contract_is_native_docx_and_keeps_three_page_structure():
+    docx = build_contract_docx(_sample())
+    assert docx.startswith(b"PK")
+    with zipfile.ZipFile(BytesIO(docx)) as archive:
+        names = set(archive.namelist())
+        assert "word/document.xml" in names
+        assert any(name.startswith("word/media/") for name in names)
+        xml = archive.read("word/document.xml").decode("utf-8")
+        assert xml.count("w:sectPr") >= 3
+        assert "أولاً: أطراف الاتفاقية" in xml
+        assert "ثانياً: التمهيد" in xml
+        assert "ثالثاً: الشروط والأحكام (1)" in xml
+        assert "ثالثاً: الشروط والأحكام (2)" in xml
+        assert "رابعاً: الموافقة الإلكترونية والاعتماد النهائي" in xml
+        assert "الطرف الثاني (التاجر)" in xml
+        assert "الطرف الأول" in xml
 
 
-def test_contract_keeps_ltr_identifiers_stable_inside_rtl_document():
-    html = build_contract_html(_sample())
-    assert '<span class="ltr">PKG-MA-2026-09-0001</span>' in html
-    assert '<span class="ltr">SA0000000000000000000000</span>' in html
-    assert '<span class="ltr">0500000000</span>' in html
+def test_contract_preserves_dynamic_values_legal_copy_and_otp_logic():
+    xml = _doc_xml(build_contract_docx(_sample()))
+    for value in (
+        "PKG-MA-2026-09-0001", "02-09-2026", "متجر الاختبار",
+        "1010101010", "310000000000003", "SA0000000000000000000000",
+        "0500000000", "merchant@example.test", "ممثل المنشأة",
+    ):
+        assert value in xml
+    for number, title, body in patch.CLAUSES:
+        assert str(number) in xml
+        assert title in xml
+        assert body in xml
+    assert patch.ACTIVATION_COPY in xml
+    assert "لا يتم تفعيل حساب التاجر تلقائياً" in xml
+    assert "الحالة: لا يصبح الحساب Active إلا بعد الاعتماد النهائي" in xml
+    assert "يقوم التاجر بتحميل هذه الاتفاقية وتوقيعها وختمها" not in xml
+
+
+def test_renderer_passes_docx_to_converter_and_returns_pdf():
+    seen = {}
+
+    def converter(source_path, output_dir):
+        seen["suffix"] = source_path.suffix
+        payload = source_path.read_bytes()
+        with zipfile.ZipFile(BytesIO(payload)) as archive:
+            assert "word/document.xml" in archive.namelist()
+        (output_dir / "merchant-agreement.pdf").write_bytes(b"%PDF-1.4\n%stub\n")
+
+    pdf = patch.render_contract_pdf_otp(_sample(), converter=converter)
+    assert seen["suffix"] == ".docx"
+    assert pdf.startswith(b"%PDF")
+
+
+def test_renderer_monkey_patch_is_active():
+    assert render_contract_pdf is patch.render_contract_pdf_otp
+    assert build_contract_docx is patch.build_contract_docx_otp
